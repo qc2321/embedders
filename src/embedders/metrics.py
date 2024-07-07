@@ -1,0 +1,47 @@
+import torch
+import networkx as nx
+
+from torchtyping import TensorType
+
+
+def distortion_loss(
+    estimated_distances: TensorType["n_points", "n_points"], true_distances: TensorType["n_points", "n_points"]
+) -> float:
+    """Compute the distortion loss between estimated SQUARED distances and true SQUARED distances."""
+    n = true_distances.shape[0]
+    idx = torch.triu_indices(n, n, offset=1)
+
+    pdist_true = true_distances[idx[0], idx[1]]
+    pdist_est = estimated_distances[idx[0], idx[1]]
+
+    return torch.sum(torch.abs((pdist_est / pdist_true) ** 2 - 1))
+
+
+def d_avg(
+    estimated_distances: TensorType["n_points", "n_points"], true_distances: TensorType["n_points", "n_points"]
+) -> float:
+    """Average distance error D_avg"""
+    n = true_distances.shape[0]
+    idx = torch.triu_indices(n, n, offset=1)
+
+    pdist_true = true_distances[idx[0], idx[1]]
+    pdist_est = estimated_distances[idx[0], idx[1]]
+
+    # Note that D_avg uses nonsquared distances:
+    return torch.mean(torch.abs(pdist_est - pdist_true) / pdist_true)
+
+
+def mean_average_precision(x_embed: TensorType["n_points", "n_dim"], graph: nx.Graph) -> float:
+    """Mean averae precision (mAP) from the Gu et al paper."""
+    raise NotImplementedError
+
+
+def dist_component_by_manifold(pm, x_embed):
+    """How much of the variance in distance is explained by each manifold?"""
+    sq_dists_by_manifold = [
+        man.dist2(x_embed[:, man2dim[i]][:, None, :], x_embed[:, man2dim[i]][None, :, :])
+        for i, man in enumerate(pm.manifolds)
+    ]
+    total_sq_dist = pm.dist2(x_embed[:, None], x_embed[None, :])
+
+    return [(torch.sum(sq_dists_by_manifold[i]) / torch.sum(total_sq_dist)).item() for i in range(len(pm.manifolds))]
