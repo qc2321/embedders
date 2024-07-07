@@ -30,6 +30,7 @@ def train_coords(
     scale_factor_learning_rate: float = 0.0,  # Off by default
     training_iterations: int = 18_000,
     loss_window_size: int = 100,
+    logging_interval: int = 10,
 ):
     # Move everything to the device
     pm.x_embed = pm.initialize_embeddings(n_points=len(dists)).to(device)
@@ -73,9 +74,12 @@ def train_coords(
 
             # TQDM management
             my_tqdm.update(1)
-            my_tqdm.set_description(f"Loss: {L.item():.3e}, Average Loss: {np.mean(pm.losses[-loss_window_size:]):.3e}")
+            my_tqdm.set_description(f"Loss: {L.item():.3e}")
 
-            d = {f"r{i}": f"{x._log_scale.item():.3f}" for i, x in enumerate(pm.manifold.manifolds)}
-            d_avg_this_iter = d_avg(dist_est, dists)
-            d["d_avg"] = f"{d_avg_this_iter:.4f}"
-            my_tqdm.set_postfix(d)
+            # Logging
+            if i % logging_interval == 0:
+                d = {f"r{i}": f"{x._log_scale.item():.3f}" for i, x in enumerate(pm.manifold.manifolds)}
+                d_avg_this_iter = d_avg(dist_est, dists)
+                d["D_avg"] = f"{d_avg_this_iter:.4f}"
+                d["L_avg"] = f"{np.mean(pm.losses[-loss_window_size:]):.3e}"
+                my_tqdm.set_postfix(d)
