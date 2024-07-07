@@ -35,11 +35,17 @@ class Manifold:
 
     def pdist(self, X: TensorType["n_points", "n_dim"]) -> TensorType["n_points", "n_points"]:
         """Compute pairwise  distances between embeddings."""
-        return self.dist(X[:, None], X[None, :])
+        if self.type == "E":
+            return self.dist(X[:, None], X[None, :]).norm(dim=-1)
+        else:
+            return self.dist(X[:, None], X[None, :])
 
     def pdist2(self, X: TensorType["n_points", "n_dim"]) -> TensorType["n_points", "n_points"]:
         """Compute pairwise SQUARED distances between embeddings."""
-        return self.dist2(X[:, None], X[None, :])
+        if self.type == "E":
+            return self.dist2(X[:, None], X[None, :]).sum(dim=-1)
+        else:
+            return self.dist2(X[:, None], X[None, :])
 
     def kl_divergence(self, p, q):
         """This doesn't come with geoopt, so we have to implement it ourselves."""
@@ -49,6 +55,7 @@ class Manifold:
 class ProductManifold(Manifold):
     def __init__(self, signature):
         # Basic properties
+        self.type = "P"
         self.signature = signature
         self.curvatures = [curvature for curvature, _ in signature]
         self.dims = [dim for _, dim in signature]

@@ -37,8 +37,10 @@ def mean_average_precision(x_embed: TensorType["n_points", "n_dim"], graph: nx.G
 
 
 def dist_component_by_manifold(pm, x_embed):
-    """How much of the variance in distance is explained by each manifold?"""
-    sq_dists_by_manifold = [man.pdist2(x_embed) for man in (pm.P)]
+    # """How much of the variance in distance is explained by each manifold?"""
+    sq_dists_by_manifold = [M.pdist2(x_embed[:, pm.man2dim[i]]) for i, M in enumerate(pm.P)]
     total_sq_dist = pm.pdist2(x_embed)
 
-    return [(torch.sum(sq_dists_by_manifold[i]) / torch.sum(total_sq_dist)).item() for i in range(len(pm.P))]
+    return [
+        torch.sum(D.triu(diagonal=1) / torch.sum(total_sq_dist.triu(diagonal=1))).item() for D in sq_dists_by_manifold
+    ]
