@@ -1,7 +1,18 @@
 import torch
 from torchtyping import TensorType
 import networkx as nx
+import pandas as pd
+import numpy as np
 from scipy.io import mmread
+
+
+def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list):
+    """Returns the distances between the top connected component of a graph"""
+    if to_undirected:
+        G = G.to_undirected()
+    top_cc = max(nx.connected_components(G), key=len)
+    print(f"Top CC has {len(top_cc)} nodes; original graph has {G.number_of_nodes()} nodes.")
+    return nx.floyd_warshall_numpy(G.subgraph(top_cc)), list(top_cc)
 
 
 def load_cities(cities_path: str = "/home/phil/productDT/data/cities.txt") -> TensorType["n_points", "n_points"]:
@@ -18,8 +29,8 @@ def load_cities(cities_path: str = "/home/phil/productDT/data/cities.txt") -> Te
 
 
 def load_cs_phds(cs_phds_path="/home/phil/productDT/data/cs_phds.txt") -> TensorType["n_points", "n_points"]:
-    G = nx.read_pajek(cs_phds_path).to_undirected()
-    phd_dists = nx.floyd_warshall_numpy(G.subgraph(max(nx.connected_components(G), key=len)))
+    G = nx.read_pajek(cs_phds_path)
+    phd_dists, _ = _top_cc_dists(G)
 
     return torch.tensor(phd_dists)
 
@@ -35,15 +46,23 @@ def load_power():
 def load_polblogs(
     polblogs_path: str = "/home/phil/productDT/data/polblogs.mtx",
     polblogs_labels_path: str = "/home/phil/productDT/data/polblogs_labels.tsv",
+    labels=False,
 ) -> TensorType["n_points", "n_points"]:
 
     # Load the graph
-    dists = nx.floyd_warshall_numpy(nx.from_scipy_sparse_array(mmread(polblogs_path)))
+    G = nx.from_scipy_sparse_array(mmread(polblogs_path))
+    dists, idx = _top_cc_dists(G)
 
     # Load the labels
-    polblogs_labels = pd.read_table(polblogs_labels_path, header=None)[0].values
+    polblogs_labels = pd.read_table(polblogs_labels_path, header=None)[0]
 
-    return torch.tensor(dists)
+    # Filter to match G
+    polblogs_labels = polblogs_labels[idx]
+
+    if labels:
+        return torch.tensor(dists), polblogs_labels
+    else:
+        return torch.tensor(dists)
 
 
 def load_blood_cells():
@@ -63,3 +82,22 @@ def load_lymphoma_and_healthy_donors():
     lymphoma = _load_lymphoma()
     healthy_donors = _load_healthy_donors()
     raise NotImplementedError
+
+
+def load(name: str, **kwargs) -> TensorType["n_points", "n_points"]:
+    if name == "cities":
+        return load_cities(**kwargs)
+    elif name == "cs_phds":
+        return load_cs_phds(**kwargs)
+    elif name == "facebook":
+        return load_facebook(**kwargs)
+    elif name == "power":
+        return load_power(**kwargs)
+    elif name == "polblogs":
+        return load_polblogs(**kwargs)
+    elif name == "blood_cells":
+        return load_blood_cells(**kwargs)
+    elif name == "lymphoma_and_healthy_donors":
+        return load_lymphoma_and_healthy_donors(**kwargs)
+    else:
+        raise ValueError(f"Unknown dataset: {name}")

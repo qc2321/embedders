@@ -14,7 +14,7 @@ class Manifold:
             self.manifold = geoopt.Scaled(geoopt.Lorentz(), self.radius, learnable=True)
         elif curvature == 0:
             self.type = "E"
-            self.manifold = geoopt.Scaled(geoopt.Euclidean(), self.radius)
+            self.manifold = geoopt.Scaled(geoopt.Euclidean(), self.radius, learnable=True)
         else:
             self.type = "S"
             self.manifold = geoopt.Scaled(geoopt.Sphere(), self.radius, learnable=True)
