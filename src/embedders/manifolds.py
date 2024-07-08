@@ -92,9 +92,9 @@ class Manifold:
 
         # Exp map onto the manifold
         return self.manifold.expmap(x=z_mean, u=z)
-    
+
     def log_likelihood(self, z, mu=None, sigma=None):
-        """ Probability density function for WN(z ; mu, Sigma) in manifold """
+        """Probability density function for WN(z ; mu, Sigma) in manifold"""
 
         # Default to mu=self.mu0 and sigma=I
         if mu is None:
@@ -107,8 +107,8 @@ class Manifold:
             return torch.distributions.MultivariateNormal(mu, sigma).log_prob(z)
 
         elif self.type in ["S", "H"]:
-            u = self.manifold.logmap(x=mu, y=z) # Map z to tangent space at mu
-            v = self.manifold.transp(x=mu, y=self.mu0, v=u) # Parallel transport to origin
+            u = self.manifold.logmap(x=mu, y=z)  # Map z to tangent space at mu
+            v = self.manifold.transp(x=mu, y=self.mu0, v=u)  # Parallel transport to origin
             # assert torch.allclose(v[:, 0], torch.Tensor([0.])) # For tangent vectors at origin this should be true
             # OK, so this assertion doesn't actually pass, but it's spiritually true
             ll = torch.distributions.MultivariateNormal(torch.zeros(self.dim), sigma).log_prob(v[:, 1:])
@@ -121,11 +121,11 @@ class Manifold:
             if self.type == "S":
                 sin_M = torch.sin
                 u_norm = self.manifold.norm(x=mu, u=u)
-            
+
             elif self.type == "H":
                 sin_M = torch.sinh
-                u_norm = self.manifold.base.norm(u=u) # Horrible workaround needed for geoopt bug
-            
+                u_norm = self.manifold.base.norm(u=u)  # Horrible workaround needed for geoopt bug
+
             return ll - (n - 1) * torch.log(R * torch.abs(sin_M(u_norm / R) / u_norm) + 1e-8)
 
 
@@ -143,14 +143,18 @@ class ProductManifold(Manifold):
         self.manifold = geoopt.ProductManifold(*[(M.manifold, M.ambient_dim) for M in self.P])
         self.name = " x ".join([M.name for M in self.P])
 
+        # Origin
+        self.mu0 = torch.cat([M.mu0 for M in self.P], axis=0)
+
         # Manifold <-> Dimension mapping
         curr_dim, curr_man, total_dims = 0, 0, 0
-        dim2man, man2dim = {}, {}
+        dim2man, man2dim, man2intrinsic = {}, {}, {}
 
         for M in self.P:
             for d in range(curr_dim, curr_dim + M.ambient_dim):
                 dim2man[d] = curr_man
             man2dim[curr_man] = list(range(curr_dim, curr_dim + M.ambient_dim))
+            man2intrinsic[curr_man] = list(range(total_dims, total_dims + M.dim))
 
             curr_dim += M.ambient_dim
             curr_man += 1
@@ -158,6 +162,7 @@ class ProductManifold(Manifold):
 
         self.dim2man = dim2man
         self.man2dim = man2dim
+        self.man2intrinsic = man2intrinsic
         self.ambient_dim = curr_dim
         self.dim = total_dims
 
@@ -190,7 +195,7 @@ class ProductManifold(Manifold):
 
     def factorize(self, X: TensorType["n_points", "n_dim"]) -> list:
         """Factorize the embeddings into the individual manifolds."""
-        return [X[:, self.man2dim[i]] for i in range(len(self.P))]
+        return [X[..., self.man2dim[i]] for i in range(len(self.P))]
 
     def sample(self, z_mean: TensorType["n_points", "n_dim"], sigma=None) -> TensorType["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
@@ -203,6 +208,31 @@ class ProductManifold(Manifold):
         assert torch.all(sigma == sigma.T)
         assert z_mean.shape[1] == self.ambient_dim
 
+        sigma_factorized = [sigma[self.man2intrinsic[i]][:, self.man2intrinsic[i]] for i in range(self.n_manifolds)]
+
         # Sample initial vector from N(0, sigma)
-        z_means = self.factorize(z_mean)
-        return torch.cat([M.sample(z_mean) for M, z_mean in zip(self.P, z_means)], axis=1)
+        return torch.cat(
+            [M.sample(z_M, sigma_M) for M, z_M, sigma_M in zip(self.P, self.factorize(z_mean), sigma_factorized)],
+            dim=1,
+        )
+
+    def log_likelihood(
+        self,
+        z: TensorType["batch_size", "n_dim"],
+        mu: TensorType["n_dim",] = None,
+        sigma: TensorType["n_intrinsic_dim", "n_intrinsic_dim"] = None,
+    ) -> TensorType["batch_size"]:
+        """Probability density function for WN(z ; mu, Sigma) in manifold"""
+        if mu is None:
+            mu = self.mu0
+        if sigma is None:
+            sigma = torch.eye(self.dim)
+        sigma_factorized = [sigma[self.man2intrinsic[i]][:, self.man2intrinsic[i]] for i in range(self.n_manifolds)]
+        # Note that this factorization assumes block-diagonal covariance matrices
+        mu_factorized = self.factorize(mu)
+        z_factorized = self.factorize(z)
+        component_lls = [
+            M.log_likelihood(z_M, mu_M, sigma_M).unsqueeze(dim=1)
+            for M, z_M, mu_M, sigma_M in zip(self.P, z_factorized, mu_factorized, sigma_factorized)
+        ]
+        return torch.cat(component_lls, axis=1).sum(axis=1)
