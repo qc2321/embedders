@@ -122,8 +122,14 @@ class Manifold:
         # Exp map onto the manifold
         return self.manifold.expmap(x=z_mean, u=z)
     
-    def log_likelihood(self, z, mu, sigma):
+    def log_likelihood(self, z, mu=None, sigma=None):
         """ Probability density function for WN(z ; mu, Sigma) in manifold """
+
+        # Default to mu=self.mu0 and sigma=I
+        if mu is None:
+            mu = self.mu0
+        if sigma is None:
+            sigma = torch.eye(self.dim)
 
         # Euclidean case is regular old Gaussian log-likelihood
         if self.type == "E":
@@ -131,20 +137,24 @@ class Manifold:
 
         elif self.type in ["S", "H"]:
             u = self.manifold.logmap(x=mu, y=z) # Map z to tangent space at mu
-            v = self.manifold.transp(x=mu, y=manifold.mu0, v=u) # Parallel transport to origin
-            ll = torch.distributions.MultivariateNormal(torch.zeros(self.dim), sigma).log_prob(v)
+            v = self.manifold.transp(x=mu, y=self.mu0, v=u) # Parallel transport to origin
+            assert torch.allclose(v[:, 0], torch.Tensor([0.])) # For tangent vectors at origin this should be true
+            ll = torch.distributions.MultivariateNormal(torch.zeros(self.dim), sigma).log_prob(v[:, 1:])
 
             # For convenience
             R = self.scale
             n = self.dim
-            u_norm = self.manifold.inner(u, u) # Works for H and S
 
             # Final formula (epsilon to avoid log(0))
             if self.type == "S":
-                return ll - (n - 1) * torch.log(R * torch.abs(torch.sin(u_norm / R) / u_norm) + 1e-8)
+                sin_M = torch.sin
+                u_norm = self.manifold.norm(x=mu, u=u)
             
             elif self.type == "H":
-                return ll - (n - 1) * torch.log(R * torch.abs(torch.sinh(u_norm / R) / u_norm) + 1e-8)
+                sin_M = torch.sinh
+                u_norm = self.manifold.base.norm(u=u) # Horrible workaround needed for geoopt bug
+            
+            return ll - (n - 1) * torch.log(R * torch.abs(sin_M(u_norm / R) / u_norm) + 1e-8)
 
 
 class ProductManifold(Manifold):
