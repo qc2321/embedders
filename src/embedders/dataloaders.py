@@ -3,6 +3,7 @@ from torchtyping import TensorType
 import networkx as nx
 import pandas as pd
 import numpy as np
+import shlex
 from scipy.io import mmread
 
 
@@ -28,11 +29,38 @@ def load_cities(cities_path: str = "/home/phil/productDT/data/cities.txt") -> Te
     return cities_dists
 
 
-def load_cs_phds(cs_phds_path="/home/phil/productDT/data/cs_phds.txt") -> TensorType["n_points", "n_points"]:
-    G = nx.read_pajek(cs_phds_path)
-    phd_dists, _ = _top_cc_dists(G)
+def load_cs_phds(cs_phds_path="/home/phil/productDT/data/cs_phds.txt", labels: bool = False) -> torch.Tensor:
+    G = nx.Graph()
 
-    return torch.tensor(phd_dists)
+    with open(cs_phds_path, "r") as f:
+        lines = f.readlines()
+
+    # Add nodes
+    for line in lines[2:1027]:
+        num, name, v1, v2, v3 = shlex.split(line)
+        num = int(num)
+        v1, v2, v3 = float(v1), float(v2), float(v3)
+        G.add_node(num, attr={"name": line, "val1": v1, "val2": v2, "val3": v3})
+
+    # Add edges
+    for line in lines[1028:2071]:
+        n1, n2, weight = shlex.split(line)
+        n1, n2 = int(n1), int(n2)
+        weight = float(weight)
+        G.add_edge(n1, n2, weight=weight)
+
+    # Add years
+    for i, line in enumerate(lines[2075:-1]):
+        year = int(line.strip())
+        G.nodes[i + 1]["year"] = year  # They're 1-indexed
+
+    phd_dists, idx = _top_cc_dists(G)
+
+    if labels:
+        labels = [G.nodes[i]["year"] for i in idx]
+        return torch.tensor(phd_dists), labels
+    else:
+        return torch.tensor(phd_dists)
 
 
 def load_facebook():
