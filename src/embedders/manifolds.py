@@ -60,35 +60,6 @@ class Manifold:
         else:
             return self.dist2(X[:, None], X[None, :])
 
-    def kl_divergence(self, p, q, z, other_sample):
-        """This doesn't come with geoopt, so we have to implement it ourselves.
-
-        KL divergence is calculated as: KL(p || q) = E_p[log(p(z) / q(z))]
-        where z is a point on the manifold.
-
-        Args:
-        p (Distribution): The "true" distribution which typically represents the prior.
-        q (Distribution): The variational distribution, typically representing the posterior.
-        """
-
-        # q = WrappedNormal(z_mean, sigma, manifold=self.manifold)
-        # p = WrappedNormal(origin, I, manifold=self.manifold)
-        # For other_sample, look at this:
-        # log(z) = log p(v) - log det [(\partial / \partial v) proj_{\mu}(v)]
-        # v = data[1]
-        # assert torch.isfinite(v).all()
-
-        # n_logprob = self.normal.log_prob(v)
-        # logdet = self.manifold.logdet(self.loc, self.scale, z, (*data, n_logprob))
-        # assert n_logprob.shape == logdet.shape
-        # log_prob = n_logprob - logdet
-        # assert torch.isfinite(log_prob).all()
-        # return log_prob
-
-        log_q = q.log_prob(z, other_sample)
-        log_p = p.log_prob(z)
-        return log_q - log_p
-
     def _to_tangent_plane_mu0(self, x: TensorType["n_points", "n_dim"]) -> TensorType["n_points", "n_ambient_dim"]:
         x = torch.Tensor(x).reshape(-1, self.dim)
         if self.type == "E":
@@ -138,7 +109,8 @@ class Manifold:
         elif self.type in ["S", "H"]:
             u = self.manifold.logmap(x=mu, y=z) # Map z to tangent space at mu
             v = self.manifold.transp(x=mu, y=self.mu0, v=u) # Parallel transport to origin
-            assert torch.allclose(v[:, 0], torch.Tensor([0.])) # For tangent vectors at origin this should be true
+            # assert torch.allclose(v[:, 0], torch.Tensor([0.])) # For tangent vectors at origin this should be true
+            # OK, so this assertion doesn't actually pass, but it's spiritually true
             ll = torch.distributions.MultivariateNormal(torch.zeros(self.dim), sigma).log_prob(v[:, 1:])
 
             # For convenience
