@@ -5,5 +5,14 @@ setup(
     version="0.1",
     packages=find_packages(where="src/embedders"),
     package_dir={"": "src"},
-    requires=[],  # TODO: Add dependencies
+    requires=[
+        "torch",
+        "geoopt",
+        "networkx",
+        "numpy ",
+        "pandas",
+        "matplotlib",
+        "scipy",
+        "torchtyping",
+    ]
 )
