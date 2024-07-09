@@ -5,7 +5,11 @@ from torchtyping import TensorType
 
 
 class Manifold:
-    def __init__(self, curvature, dim):
+    def __init__(self, curvature, dim, device="cpu"):
+        # Device management
+        self.device = device
+
+        # Basic properties
         self.curvature = curvature
         self.dim = dim
         self.scale = abs(curvature) ** -0.5 if curvature != 0 else 1
@@ -13,20 +17,29 @@ class Manifold:
         # A couple of manifold-specific quirks we need to deal with here
         if curvature < 0:
             self.type = "H"
-            self.manifold = geoopt.Scaled(geoopt.Lorentz(), self.scale, learnable=True)
+            self.manifold = geoopt.Scaled(geoopt.Lorentz(), self.scale, learnable=True).to(self.device)
         elif curvature == 0:
             self.type = "E"
-            self.manifold = geoopt.Scaled(geoopt.Euclidean(), self.scale, learnable=True)
+            self.manifold = geoopt.Scaled(geoopt.Euclidean(), self.scale, learnable=True).to(self.device)
         else:
             self.type = "S"
-            self.manifold = geoopt.Scaled(geoopt.Sphere(), self.scale, learnable=True)
+            self.manifold = geoopt.Scaled(geoopt.Sphere(), self.scale, learnable=True).to(self.device)
 
         self.ambient_dim = dim if curvature == 0 else dim + 1
-        self.mu0 = torch.zeros(self.ambient_dim) if curvature == 0 else torch.Tensor([1.0] + [0.0] * dim)
+        if curvature == 0:
+            self.mu0 = torch.zeros(self.dim).to(self.device)
+        else:
+            self.mu0 = torch.Tensor([1.0] + [0.0] * dim).to(self.device)
         self.name = f"{self.type}_{abs(self.curvature):.1f}^{dim}"
 
         # Couple of assertions to check
         assert self.manifold.check_point(self.mu0)
+
+    def to(self, device):
+        self.device = device
+        self.manifold = self.manifold.to(device)
+        self.mu0 = self.mu0.to(device)
+        return self
 
     def dist(
         self, X: TensorType["n_points1", "n_dim"], Y: TensorType["n_points2", "n_dim"]
@@ -65,22 +78,25 @@ class Manifold:
         if self.type == "E":
             return x
         else:
-            return torch.cat([torch.zeros((x.shape[0], 1)), x], dim=1)
+            return torch.cat([torch.zeros((x.shape[0], 1), device=self.device), x], dim=1)
 
-    def sample(self, z_mean, sigma=None):
+    def sample(
+        self, z_mean: TensorType["n_points", "n_ambient_dim"], sigma: TensorType["n_points", "n_dim", "n_dim"] = None
+    ) -> TensorType["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
-        z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim)
+        z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
+        n = z_mean.shape[0]
         if sigma is None:
-            sigma = torch.eye(self.dim)
+            sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
         else:
-            sigma = torch.Tensor(sigma)
-        assert sigma.shape == (self.dim, self.dim)
-        assert torch.all(sigma == sigma.T)
-        assert z_mean.shape[1] == self.ambient_dim
+            sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
+        assert sigma.shape == (n, self.dim, self.dim)
+        assert torch.all(sigma == sigma.transpose(-1, -2))
+        assert z_mean.shape[-1] == self.ambient_dim
 
         # Sample initial vector from N(0, sigma)
-        N = torch.distributions.MultivariateNormal(torch.zeros(self.dim), sigma)
-        v = N.sample((z_mean.shape[0],))
+        N = torch.distributions.MultivariateNormal(torch.zeros((n, self.dim), device=self.device), sigma)
+        v = N.sample(sample_shape=(1,)).reshape(n, self.dim)  # TODO: allow for other numbers of samples
 
         # Don't need to adjust normal vectors for the Scaled manifold class in geoopt - very cool!
 
@@ -93,14 +109,22 @@ class Manifold:
         # Exp map onto the manifold
         return self.manifold.expmap(x=z_mean, u=z)
 
-    def log_likelihood(self, z, mu=None, sigma=None):
+    def log_likelihood(
+        self,
+        z,
+        mu: TensorType["n_points", "n_ambient_dim"] = None,
+        sigma: TensorType["n_points", "n_dim", "n_dim"] = None,
+    ) -> TensorType["n_points"]:
         """Probability density function for WN(z ; mu, Sigma) in manifold"""
 
         # Default to mu=self.mu0 and sigma=I
         if mu is None:
             mu = self.mu0
+        mu = torch.Tensor(mu).reshape(-1, self.ambient_dim).to(self.device)
         if sigma is None:
-            sigma = torch.eye(self.dim)
+            sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
+        else:
+            sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
 
         # Euclidean case is regular old Gaussian log-likelihood
         if self.type == "E":
@@ -111,7 +135,11 @@ class Manifold:
             v = self.manifold.transp(x=mu, y=self.mu0, v=u)  # Parallel transport to origin
             # assert torch.allclose(v[:, 0], torch.Tensor([0.])) # For tangent vectors at origin this should be true
             # OK, so this assertion doesn't actually pass, but it's spiritually true
-            ll = torch.distributions.MultivariateNormal(torch.zeros(self.dim), sigma).log_prob(v[:, 1:])
+            if torch.isnan(v).any():
+                print("NANs in parallel transport")
+                v = torch.nan_to_num(v, nan=0.0)
+            N = torch.distributions.MultivariateNormal(torch.zeros(self.dim, device=self.device), sigma)
+            ll = N.log_prob(v[:, 1:])
 
             # For convenience
             R = self.scale
@@ -130,7 +158,10 @@ class Manifold:
 
 
 class ProductManifold(Manifold):
-    def __init__(self, signature):
+    def __init__(self, signature, device="cpu"):
+        # Device management
+        self.device = device
+
         # Basic properties
         self.type = "P"
         self.signature = signature
@@ -139,12 +170,12 @@ class ProductManifold(Manifold):
         self.n_manifolds = len(signature)
 
         # Actually initialize the geoopt manifolds; other derived properties
-        self.P = [Manifold(curvature, dim) for curvature, dim in signature]
+        self.P = [Manifold(curvature, dim, device=device) for curvature, dim in signature]
         self.manifold = geoopt.ProductManifold(*[(M.manifold, M.ambient_dim) for M in self.P])
         self.name = " x ".join([M.name for M in self.P])
 
         # Origin
-        self.mu0 = torch.cat([M.mu0 for M in self.P], axis=0)
+        self.mu0 = torch.cat([M.mu0 for M in self.P], axis=0).to(self.device)
 
         # Manifold <-> Dimension mapping
         curr_dim, curr_man, total_dims = 0, 0, 0
@@ -166,6 +197,24 @@ class ProductManifold(Manifold):
         self.ambient_dim = curr_dim
         self.dim = total_dims
 
+        # Lift matrix - useful for tensor stuff
+        # The idea here is to right-multiply by this to lift a vector in R^dim to a vector in R^ambient_dim
+        # such that there are zeros in all the right places, i.e. to make it a tangent vector at the origin of P
+        self.projection_matrix = torch.zeros(self.dim, self.ambient_dim, device=self.device)
+        for i in range(len(self.P)):
+            intrinsic_dims = self.man2intrinsic[i]
+            ambient_dims = self.man2dim[i]
+            for j, k in zip(intrinsic_dims, ambient_dims[-len(intrinsic_dims) :]):
+                self.projection_matrix[j, k] = 1.0
+
+    def to(self, device):
+        self.device = device
+        self.P = [M.to(device) for M in self.P]
+        self.manifold = self.manifold.to(device)
+        self.mu0 = self.mu0.to(device)
+        self.projection_matrix = self.projection_matrix.to(device)
+        return self
+
     def initialize_embeddings(self, n_points, scales=1.0):
         """Randomly initialize n_points embeddings on the product manifold."""
         # Scales management
@@ -179,17 +228,23 @@ class ProductManifold(Manifold):
             if M.type == "H":
                 x_embed.append(
                     M.manifold.expmap0(
-                        u=torch.cat([torch.zeros(n_points, 1), scale * torch.randn(n_points, M.dim)], dim=1)
+                        u=torch.cat(
+                            [
+                                torch.zeros(n_points, 1, device=device),
+                                scale * torch.randn(n_points, M.dim, device=device),
+                            ],
+                            dim=1,
+                        )
                     )
                 )
             elif M.type == "E":
-                x_embed.append(scale * torch.randn(n_points, M.dim))
+                x_embed.append(scale * torch.randn(n_points, M.dim, device=device))
             elif M.type == "S":
                 x_embed.append(M.manifold.random_uniform(n_points, M.ambient_dim))
             else:
                 raise ValueError("Unknown manifold type")
 
-        x_embed = torch.cat(x_embed, axis=1)
+        x_embed = torch.cat(x_embed, axis=1).to(self.device)
         # x_embed = geoopt.ManifoldParameter(x_embed, manifold=self.manifold)
         return x_embed
 
@@ -197,18 +252,24 @@ class ProductManifold(Manifold):
         """Factorize the embeddings into the individual manifolds."""
         return [X[..., self.man2dim[i]] for i in range(len(self.P))]
 
-    def sample(self, z_mean: TensorType["n_points", "n_dim"], sigma=None) -> TensorType["n_points", "n_ambient_dim"]:
+    def sample(
+        self, z_mean: TensorType["n_points", "n_dim"], sigma: TensorType["n_points", "n_dim", "n_dim"] = None
+    ) -> TensorType["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
-        z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim)
+        z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
+        n = z_mean.shape[0]
         if sigma is None:
-            sigma = torch.eye(self.dim)
+            sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
         else:
-            sigma = torch.Tensor(sigma)
-        assert sigma.shape == (self.dim, self.dim)
-        assert torch.all(sigma == sigma.T)
-        assert z_mean.shape[1] == self.ambient_dim
+            sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
 
-        sigma_factorized = [sigma[self.man2intrinsic[i]][:, self.man2intrinsic[i]] for i in range(self.n_manifolds)]
+        assert sigma.shape == (n, self.dim, self.dim)
+        assert torch.all(sigma == sigma.transpose(-1, -2))
+        assert z_mean.shape[-1] == self.ambient_dim
+
+        sigma_factorized = [
+            sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
+        ]
 
         # Sample initial vector from N(0, sigma)
         return torch.cat(
@@ -223,11 +284,14 @@ class ProductManifold(Manifold):
         sigma: TensorType["n_intrinsic_dim", "n_intrinsic_dim"] = None,
     ) -> TensorType["batch_size"]:
         """Probability density function for WN(z ; mu, Sigma) in manifold"""
+        n = z.shape[0]
         if mu is None:
-            mu = self.mu0
+            mu = torch.stack([self.mu0] * z.shape[0]).to(self.device)
         if sigma is None:
-            sigma = torch.eye(self.dim)
-        sigma_factorized = [sigma[self.man2intrinsic[i]][:, self.man2intrinsic[i]] for i in range(self.n_manifolds)]
+            sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
+        sigma_factorized = [
+            sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
+        ]
         # Note that this factorization assumes block-diagonal covariance matrices
         mu_factorized = self.factorize(mu)
         z_factorized = self.factorize(z)
