@@ -48,6 +48,7 @@ class ProductSpaceVAE(torch.nn.Module):
         sigma: TensorType["n_latent", "n_latent"],
     ) -> TensorType["batch_size"]:
         # Get KL divergence as the average of log q(z|x) - log p(z)
+        # See http://joschu.net/blog/kl-approx.html for more info
         means = torch.repeat_interleave(z_mean, self.n_samples, dim=0)
         sigmas = torch.repeat_interleave(sigma, self.n_samples, dim=0)
         z_samples = self.product_manifold.sample(means, sigmas)
@@ -58,5 +59,5 @@ class ProductSpaceVAE(torch.nn.Module):
     def elbo(self, x: TensorType["batch_size", "n_features"]) -> TensorType["batch_size"]:
         x_reconstructed, z_means, sigmas = self(x)
         kld = self.kl_divergence(z_means, sigmas)
-        ll = self.reconstruction_loss(x_reconstructed, x).sum(dim=1)
+        ll = -self.reconstruction_loss(x_reconstructed, x).sum(dim=1)
         return (ll - self.beta * kld).mean(), ll.mean(), kld.mean()
