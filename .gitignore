@@ -1,4 +1,5 @@
 *.egg-info/
 *__pycache__/
 *.pyc
-data/
+data/MNIST/*
+data/blood_cell_scrna/*

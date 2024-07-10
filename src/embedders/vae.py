@@ -29,7 +29,10 @@ class ProductSpaceVAE(torch.nn.Module):
         else:
             raise ValueError(f"Unknown reconstruction loss: {reconstruction_loss}")
 
-    def encode(self, x: TensorType["batch_size", "n_features"]) -> TensorType["batch_size", "n_latent"]:
+    def encode(
+        self, x: TensorType["batch_size", "n_features"]
+    ) -> (TensorType["batch_size", "n_latent"], TensorType["batch_size", "n_latent"]):
+        """Must return z_mean, z_logvar"""
         return self.encoder(x)
 
     def decode(self, z: TensorType["batch_size", "n_latent"]) -> TensorType["batch_size", "n_features"]:

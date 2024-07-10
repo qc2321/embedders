@@ -40,3 +40,8 @@ def spherical_to_polar(X: TensorType["n_points", "n_dim"]) -> TensorType["n_poin
             out[:, i] = angle.squeeze()
 
     return out[:, 1:]
+
+
+def S2_to_polar(X: TensorType["n_points", 3]) -> TensorType["n_points", 2]:
+    """Convert S^2,1 coordinates to polar coordinates."""
+    return torch.stack([torch.acos(X[:, 2]), torch.atan2(X[:, 1], X[:, 0])], dim=1)
