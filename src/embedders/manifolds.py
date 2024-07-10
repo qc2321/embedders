@@ -81,7 +81,9 @@ class Manifold:
             return torch.cat([torch.zeros((x.shape[0], 1), device=self.device), x], dim=1)
 
     def sample(
-        self, z_mean: TensorType["n_points", "n_ambient_dim"], sigma: TensorType["n_points", "n_dim", "n_dim"] = None
+        self,
+        z_mean: TensorType["n_points", "n_ambient_dim"] = None,
+        sigma: TensorType["n_points", "n_dim", "n_dim"] = None,
     ) -> TensorType["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
         z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
@@ -105,6 +107,10 @@ class Manifold:
 
         # Move to z_mean via parallel transport
         z = self.manifold.transp(x=self.mu0, y=z_mean, v=v)
+
+        # If we're sampling at the origin, z and v should be the same
+        mask = torch.all(z == self.mu0, dim=1)
+        assert torch.allclose(v[mask], z[mask])
 
         # Exp map onto the manifold
         return self.manifold.expmap(x=z_mean, u=z)
