@@ -3,3 +3,4 @@
 *.pyc
 data/MNIST/*
 data/blood_cell_scrna/*
+data/polblogs_embeddings/*

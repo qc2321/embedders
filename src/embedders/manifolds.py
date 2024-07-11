@@ -184,24 +184,20 @@ class ProductManifold(Manifold):
         self.mu0 = torch.cat([M.mu0 for M in self.P], axis=0).to(self.device)
 
         # Manifold <-> Dimension mapping
-        curr_dim, curr_man, total_dims = 0, 0, 0
-        dim2man, man2dim, man2intrinsic = {}, {}, {}
+        self.ambient_dim, self.n_manifolds, self.dim = 0, 0, 0
+        self.dim2man, self.man2dim, self.man2intrinsic, self.intrinsic2man = {}, {}, {}, {}
 
         for M in self.P:
-            for d in range(curr_dim, curr_dim + M.ambient_dim):
-                dim2man[d] = curr_man
-            man2dim[curr_man] = list(range(curr_dim, curr_dim + M.ambient_dim))
-            man2intrinsic[curr_man] = list(range(total_dims, total_dims + M.dim))
+            for d in range(self.ambient_dim, self.ambient_dim + M.ambient_dim):
+                self.dim2man[d] = self.n_manifolds
+            for d in range(self.dim, self.dim + M.dim):
+                self.intrinsic2man[d] = self.n_manifolds
+            self.man2dim[self.n_manifolds] = list(range(self.ambient_dim, self.ambient_dim + M.ambient_dim))
+            self.man2intrinsic[self.n_manifolds] = list(range(self.dim, self.dim + M.dim))
 
-            curr_dim += M.ambient_dim
-            curr_man += 1
-            total_dims += M.dim
-
-        self.dim2man = dim2man
-        self.man2dim = man2dim
-        self.man2intrinsic = man2intrinsic
-        self.ambient_dim = curr_dim
-        self.dim = total_dims
+            self.ambient_dim += M.ambient_dim
+            self.n_manifolds += 1
+            self.dim += M.dim
 
         # Lift matrix - useful for tensor stuff
         # The idea here is to right-multiply by this to lift a vector in R^dim to a vector in R^ambient_dim
@@ -236,15 +232,15 @@ class ProductManifold(Manifold):
                     M.manifold.expmap0(
                         u=torch.cat(
                             [
-                                torch.zeros(n_points, 1, device=device),
-                                scale * torch.randn(n_points, M.dim, device=device),
+                                torch.zeros(n_points, 1, device=self.device),
+                                scale * torch.randn(n_points, M.dim, device=self.device),
                             ],
                             dim=1,
                         )
                     )
                 )
             elif M.type == "E":
-                x_embed.append(scale * torch.randn(n_points, M.dim, device=device))
+                x_embed.append(scale * torch.randn(n_points, M.dim, device=self.device))
             elif M.type == "S":
                 x_embed.append(M.manifold.random_uniform(n_points, M.ambient_dim))
             else:

@@ -72,8 +72,8 @@ def load_power():
 
 
 def load_polblogs(
-    polblogs_path: str = "/home/phil/productDT/data/polblogs.mtx",
-    polblogs_labels_path: str = "/home/phil/productDT/data/polblogs_labels.tsv",
+    polblogs_path: str = "/teamspace/studios/this_studio/embedders/data/graphs/polblogs.mtx",
+    polblogs_labels_path: str = "/teamspace/studios/this_studio/embedders/data/graphs/polblogs_labels.tsv",
     labels=False,
 ) -> TensorType["n_points", "n_points"]:
 
