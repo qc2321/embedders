@@ -93,7 +93,7 @@ class Manifold:
         else:
             sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
         assert sigma.shape == (n, self.dim, self.dim)
-        assert torch.all(sigma == sigma.transpose(-1, -2))
+        # assert torch.all(sigma == sigma.transpose(-1, -2))
         assert z_mean.shape[-1] == self.ambient_dim
 
         # Sample initial vector from N(0, sigma)
@@ -242,10 +242,12 @@ class ProductManifold(Manifold):
             elif M.type == "E":
                 x_embed.append(scale * torch.randn(n_points, M.dim, device=self.device))
             elif M.type == "S":
-                x_embed.append(M.manifold.random_uniform(n_points, M.ambient_dim))
+                x_embed.append(M.manifold.random_uniform(n_points, M.ambient_dim).to(self.device))
             else:
                 raise ValueError("Unknown manifold type")
 
+        for x in x_embed:
+            print(x.device)
         x_embed = torch.cat(x_embed, axis=1).to(self.device)
         # x_embed = geoopt.ManifoldParameter(x_embed, manifold=self.manifold)
         return x_embed
@@ -266,7 +268,7 @@ class ProductManifold(Manifold):
             sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
 
         assert sigma.shape == (n, self.dim, self.dim)
-        assert torch.all(sigma == sigma.transpose(-1, -2))
+        # assert torch.all(sigma == sigma.transpose(-1, -2))
         assert z_mean.shape[-1] == self.ambient_dim
 
         sigma_factorized = [

@@ -35,6 +35,7 @@ def gaussian_mixture(
         df=pm.dim + 1, covariance_matrix=torch.eye(pm.dim) * cov_scale_points
     ).sample(sample_shape=(num_classes,))
     assert cov_matrices.shape == (num_classes, pm.dim, pm.dim)
+    # assert torch.all(cov_matrices == cov_matrices.transpose(-1, -2))
 
     # Generate random samples for each cluster
     sample_means = torch.stack([class_means[c] for c in class_assignments])

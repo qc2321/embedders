@@ -1,3 +1,5 @@
+"""EXPERIMENTAL: SPEED UP TREE WITH MASKING"""
+
 import torch
 
 # from joblib import Parallel, delayed
@@ -15,7 +17,13 @@ def circular_greater(angles, threshold):
     return ((angles - threshold + torch.pi) % (2 * torch.pi)) - torch.pi > 0
 
 
-def calculate_info_gain(values, labels):
+def get_mask(angles):
+    # Apply circular_greater to get mask of shape (batch_size, batch_size, n_dim)
+    mask = circular_greater(angles.unsqueeze(1), angles.unsqueeze(0))
+    return mask
+
+
+def calculate_info_gain(values, labels, mask):
     batch_size, n_dim = values.shape
     n_classes = labels.shape[1]
 
@@ -28,13 +36,11 @@ def calculate_info_gain(values, labels):
     right_counts = torch.zeros((batch_size, n_dim, n_classes), device=values.device)
 
     # Calculate left and right counts for each potential split
+    # mask = get_mask(values)
     for i in range(batch_size):
-        mask = circular_greater(values, values[i].unsqueeze(0)) # (batch_size, n_dim)
         for j in range(n_dim):
-            left_mask = ~mask[:, j]
-            right_mask = mask[:, j]
-            # left_counts[i, j] = label_one_hot[left_mask].sum(dim=0)
-            # right_counts[i, j] = label_one_hot[right_mask].sum(dim=0)
+            left_mask = ~mask[i, :, j]
+            right_mask = mask[i, :, j]
             left_counts[i, j] = labels[left_mask].sum(dim=0)
             right_counts[i, j] = labels[right_mask].sum(dim=0)
 
@@ -55,26 +61,27 @@ def calculate_info_gain(values, labels):
     return info_gain
 
 
+def _get_angle_vals(X, pm):
+    angle_vals = torch.zeros((X.shape[0], pm.dim), device=X.device, dtype=X.dtype)
+
+    for i, M in enumerate(pm.P):
+        dims = pm.man2dim[i]
+        dims_target = pm.man2intrinsic[i]
+        if M.type in ["H", "S"]:
+            angle_vals[:, dims_target] = torch.atan2(X[:, dims[0]].view(-1, 1), X[:, dims[1:]])
+        elif M.type == "E":
+            angle_vals[:, dims_target] = torch.atan2(torch.tensor(1), X[:, dims])
+
+    return angle_vals
+
+
 class TorchProductSpaceDT(ProductSpaceDT):
     def __init__(self, signature, **kwargs):
         sig_r = [(x[1], x[0]) for x in signature]
         super().__init__(signature=sig_r, **kwargs)
         self.pm = ProductManifold(signature=signature)
 
-    def _get_angle_vals(self, X):
-        angle_vals = torch.zeros((X.shape[0], self.pm.dim), device=X.device, dtype=X.dtype)
-
-        for i, M in enumerate(self.pm.P):
-            dims = self.pm.man2dim[i]
-            dims_target = self.pm.man2intrinsic[i]
-            if M.type in ["H", "S"]:
-                angle_vals[:, dims_target] = torch.atan2(X[:, dims[0]].view(-1, 1), X[:, dims[1:]])
-            elif M.type == "E":
-                angle_vals[:, dims_target] = torch.atan2(torch.tensor(1), X[:, dims])
-
-        return angle_vals
-
-    def fit(self, X, y):
+    def fit(self, X, y, preprocess=True, mask=None):
         """Fit a decision tree to the data. Modified from HyperbolicDecisionTreeClassifier
         to remove multiple timelike dimensions in product space."""
 
@@ -82,11 +89,17 @@ class TorchProductSpaceDT(ProductSpaceDT):
         self.classes_, y_relabeled = torch.unique(y, return_inverse=True)
 
         # First, we can compute the angles of all 2-d projections
-        angle_vals = self._get_angle_vals(X)
-        labels = torch.nn.functional.one_hot(y_relabeled, num_classes=len(self.classes_)).float()
-        self.tree = self._fit_node(X=angle_vals, y=labels, depth=0)
+        if preprocess:
+            angle_vals = _get_angle_vals(X, pm=self.pm)
+            labels = torch.nn.functional.one_hot(y_relabeled, num_classes=len(self.classes_)).float()
+        else:
+            angle_vals = X
+            labels = y
+        if mask is None:
+            mask = get_mask(angle_vals)
+        self.tree = self._fit_node(X=angle_vals, y=labels, depth=0, mask=mask)
 
-    def _fit_node(self, X, y, depth):
+    def _fit_node(self, X, y, depth, mask):
         # print(f"Depth {depth} with {X.shape} samples")
         # Base case
         if depth == self.max_depth or len(X) < self.min_samples_split or len(torch.unique(y)) == 1:
@@ -94,7 +107,7 @@ class TorchProductSpaceDT(ProductSpaceDT):
             return DecisionNode(value=value, probs=probs)
 
         # Recursively find the best split:
-        ig = calculate_info_gain(X, y)
+        ig = calculate_info_gain(X, y, mask)
         best_idx = torch.argmax(ig)
         best_row, best_dim = best_idx // X.shape[1], best_idx % X.shape[1]
         best_ig = ig[best_row, best_dim]
@@ -110,8 +123,7 @@ class TorchProductSpaceDT(ProductSpaceDT):
             best_theta = (X[best_row, best_dim] + next_largest) / 2
         else:
             best_theta = torch.arctan2(
-                torch.tensor([2.0], device=X.device), 
-                1 / torch.tan(X[best_row, best_dim]) + 1 / torch.tan(next_largest)
+                torch.tensor([2.0], device=X.device), 1 / torch.tan(X[best_row, best_dim]) + 1 / torch.tan(next_largest)
             )
 
         # Fallback case:
@@ -123,11 +135,12 @@ class TorchProductSpaceDT(ProductSpaceDT):
         # Populate:
         node = DecisionNode(feature=best_dim, theta=best_theta)
         node.score = best_ig
-        left, right = circular_greater(X[:, best_dim], best_theta), ~circular_greater(X[:, best_dim], best_theta)
-        node.left = self._fit_node(X=X[left], y=y[left], depth=depth + 1)
-        node.right = self._fit_node(X=X[right], y=y[right], depth=depth + 1)
+        # left, right = circular_greater(X[:, best_dim], best_theta), ~circular_greater(X[:, best_dim], best_theta)
+        l, r = mask[best_row, :, best_dim], ~mask[best_row, :, best_dim]
+        node.left = self._fit_node(X=X[l], y=y[l], depth=depth + 1, mask=mask[l][:, l])
+        node.right = self._fit_node(X=X[r], y=y[r], depth=depth + 1, mask=mask[r][:, r])
         return node
-    
+
     def _leaf_values(self, y):
         y_sum = y.sum(dim=0)
         value = torch.argmax(y_sum)
@@ -135,10 +148,8 @@ class TorchProductSpaceDT(ProductSpaceDT):
         return value, probs
 
     def predict(self, X):
-        angle_vals = self._get_angle_vals(X)
-        return self.classes_[
-            torch.tensor([self._traverse(x).value for x in angle_vals], device=X.device)
-        ]
+        angle_vals = _get_angle_vals(X, pm=self.pm)
+        return self.classes_[torch.tensor([self._traverse(x).value for x in angle_vals], device=X.device)]
 
     def _left(self, x, node):
         """Boolean: Go left?"""
@@ -163,42 +174,26 @@ class TorchProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.max_depth = max_depth
         self.n_jobs = n_jobs
         self.trees = [TorchProductSpaceDT(signature, max_depth=max_depth) for _ in range(n_estimators)]
+        self.pm = ProductManifold(signature=signature)
 
-    def _generate_subsample(self, X, y):
+    def _generate_subsample(self, X, y, mask):
         n_samples = X.shape[0]
         sample_size = int(n_samples * self.max_samples)
         # indices = np.random.choice(n_samples, size=sample_size, replace=True)
         indices = torch.randint(0, n_samples, (sample_size,))
-        return X[indices], y[indices]
+        return X[indices], y[indices], mask[indices][:, indices]
 
     def fit(self, X, y):
+        self.classes_, y_relabeled = torch.unique(y, return_inverse=True)
+
+        angle_vals = _get_angle_vals(X, pm=self.pm)
+        labels = torch.nn.functional.one_hot(y_relabeled, num_classes=len(self.classes_)).float()
+        mask = get_mask(angle_vals)
+
         for tree in self.trees:
-            X_sample, y_sample = self._generate_subsample(X, y)
-            tree.fit(X_sample, y_sample)
+            X_sample, y_sample, mask_sample = self._generate_subsample(angle_vals, labels, mask)
+            tree.fit(X_sample, y_sample, preprocess=False, mask=mask_sample)
         return self
-
-    # def fit(self, X, y, use_tqdm=False, seed=None):
-    #     """Fit a decision tree to subsamples"""
-    #     self.classes_ = torch.unique(y)
-
-    #     if seed is not None:
-    #         self.random_state = seed
-    #     if self.random_state is not None:
-    #         # np.random.seed(self.random_state)
-    #         torch.manual_seed(self.random_state)
-
-    #     # Fit decision trees individually (parallelized):
-    #     trees = tqdm(self.trees) if use_tqdm else self.trees
-    #     if self.n_jobs != 1:
-    #         fitted_trees = Parallel(n_jobs=self.n_jobs)(
-    #             delayed(tree.fit)(*self._generate_subsample(X, y)) for tree in trees
-    #         )
-    #         self.trees = fitted_trees
-    #     else:
-    #         for tree in trees:
-    #             X_sample, y_sample = self._generate_subsample(X, y)
-    #             tree.fit(X_sample, y_sample)
-    #     return self
 
     def predict(self, X):
         predictions = torch.stack([tree.predict(X) for tree in self.trees])

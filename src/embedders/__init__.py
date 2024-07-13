@@ -1,3 +1,4 @@
+import embedders.benchmarks
 import embedders.coordinate_learning
 import embedders.dataloaders
 import embedders.gaussian_mixture
