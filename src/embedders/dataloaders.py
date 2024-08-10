@@ -29,7 +29,7 @@ def load_cities(cities_path: str = "/home/phil/productDT/data/cities.txt") -> Te
     return cities_dists
 
 
-def load_cs_phds(cs_phds_path="/home/phil/productDT/data/cs_phds.txt", labels: bool = False) -> torch.Tensor:
+def load_cs_phds(cs_phds_path="../data/graphs/cs_phds.txt", labels: bool = False) -> torch.Tensor:
     G = nx.Graph()
 
     with open(cs_phds_path, "r") as f:
