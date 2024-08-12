@@ -2,10 +2,11 @@ import torch
 import geoopt
 
 from torchtyping import TensorType
+from typing import List, Optional, Tuple, Union
 
 
 class Manifold:
-    def __init__(self, curvature, dim, device="cpu"):
+    def __init__(self, curvature: float, dim: int, device: str="cpu"):
         # Device management
         self.device = device
 
@@ -35,7 +36,7 @@ class Manifold:
         # Couple of assertions to check
         assert self.manifold.check_point(self.mu0)
 
-    def to(self, device):
+    def to(self, device: str):
         self.device = device
         self.manifold = self.manifold.to(device)
         self.mu0 = self.mu0.to(device)
@@ -82,8 +83,8 @@ class Manifold:
 
     def sample(
         self,
-        z_mean: TensorType["n_points", "n_ambient_dim"] = None,
-        sigma: TensorType["n_points", "n_dim", "n_dim"] = None,
+        z_mean: Optional[TensorType["n_points", "n_ambient_dim"]] = None,
+        sigma: Optional[TensorType["n_points", "n_dim", "n_dim"]] = None,
     ) -> TensorType["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
         z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
@@ -117,9 +118,9 @@ class Manifold:
 
     def log_likelihood(
         self,
-        z,
-        mu: TensorType["n_points", "n_ambient_dim"] = None,
-        sigma: TensorType["n_points", "n_dim", "n_dim"] = None,
+        z: TensorType["n_points", "n_ambient_dim"],
+        mu: Optional[TensorType["n_points", "n_ambient_dim"]] = None,
+        sigma: Optional[TensorType["n_points", "n_dim", "n_dim"]] = None,
     ) -> TensorType["n_points"]:
         """Probability density function for WN(z ; mu, Sigma) in manifold"""
 
@@ -164,7 +165,7 @@ class Manifold:
 
 
 class ProductManifold(Manifold):
-    def __init__(self, signature, device="cpu"):
+    def __init__(self, signature: List[Tuple[float, int]], device: str="cpu"):
         # Device management
         self.device = device
 
@@ -209,7 +210,7 @@ class ProductManifold(Manifold):
             for j, k in zip(intrinsic_dims, ambient_dims[-len(intrinsic_dims) :]):
                 self.projection_matrix[j, k] = 1.0
 
-    def to(self, device):
+    def to(self, device: str):
         self.device = device
         self.P = [M.to(device) for M in self.P]
         self.manifold = self.manifold.to(device)
@@ -217,7 +218,9 @@ class ProductManifold(Manifold):
         self.projection_matrix = self.projection_matrix.to(device)
         return self
 
-    def initialize_embeddings(self, n_points, scales=1.0):
+    def initialize_embeddings(
+            self, n_points: int, scales: Union[List[float], float] = 1.0
+        ) -> TensorType["n_points", "n_ambient_dim"]:
         """Randomly initialize n_points embeddings on the product manifold."""
         # Scales management
         if not isinstance(scales, list):
@@ -252,28 +255,39 @@ class ProductManifold(Manifold):
         # x_embed = geoopt.ManifoldParameter(x_embed, manifold=self.manifold)
         return x_embed
 
-    def factorize(self, X: TensorType["n_points", "n_dim"]) -> list:
+    def factorize(self, X: TensorType["n_points", "n_dim"]) -> List[TensorType["n_points", "n_dim_manifold"]]:
         """Factorize the embeddings into the individual manifolds."""
         return [X[..., self.man2dim[i]] for i in range(len(self.P))]
 
     def sample(
-        self, z_mean: TensorType["n_points", "n_dim"], sigma: TensorType["n_points", "n_dim", "n_dim"] = None
+        self, 
+        z_mean: TensorType["n_points", "n_dim"], 
+        # sigma: Optional[TensorType["n_points", "n_dim", "n_dim"]] = None
+        sigma_factorized: Optional[List[TensorType["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
     ) -> TensorType["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
         z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
         n = z_mean.shape[0]
-        if sigma is None:
-            sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
+        # if sigma is None:
+            # sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
+        # else:
+            # sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
+        if sigma_factorized is None:
+            sigma_factorized = [torch.stack([torch.eye(M.dim)] * n) for M in self.P]
         else:
-            sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
+            sigma_factorized = [
+                torch.Tensor(sigma).reshape(-1, M.dim, M.dim).to(self.device) 
+                for M, sigma in zip(self.P, sigma_factorized)
+            ]
 
-        assert sigma.shape == (n, self.dim, self.dim)
+        # assert sigma.shape == (n, self.dim, self.dim)
         # assert torch.all(sigma == sigma.transpose(-1, -2))
+        assert sum([sigma.shape == (n, M.dim, M.dim) for M, sigma in zip(self.P, sigma_factorized)]) == len(self.P)
         assert z_mean.shape[-1] == self.ambient_dim
 
-        sigma_factorized = [
-            sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
-        ]
+        # sigma_factorized = [
+        #     sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
+        # ]
 
         # Sample initial vector from N(0, sigma)
         return torch.cat(
@@ -284,18 +298,21 @@ class ProductManifold(Manifold):
     def log_likelihood(
         self,
         z: TensorType["batch_size", "n_dim"],
-        mu: TensorType["n_dim",] = None,
-        sigma: TensorType["n_intrinsic_dim", "n_intrinsic_dim"] = None,
+        mu: Optional[TensorType["n_dim",]] = None,
+        # sigma: TensorType["n_intrinsic_dim", "n_intrinsic_dim"] = None,
+        sigma_factorized: Optional[List[TensorType["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
     ) -> TensorType["batch_size"]:
         """Probability density function for WN(z ; mu, Sigma) in manifold"""
         n = z.shape[0]
         if mu is None:
-            mu = torch.stack([self.mu0] * z.shape[0]).to(self.device)
-        if sigma is None:
-            sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
-        sigma_factorized = [
-            sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
-        ]
+            mu = torch.stack([self.mu0] * n).to(self.device)
+        # if sigma is None:
+            # sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
+        # sigma_factorized = [
+        #     sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
+        # ]
+        if sigma_factorized is None:
+            sigma_factorized = [torch.stack([torch.eye(M.dim)] * n) for M in self.P]
         # Note that this factorization assumes block-diagonal covariance matrices
         mu_factorized = self.factorize(mu)
         z_factorized = self.factorize(z)

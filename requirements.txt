@@ -4,5 +4,7 @@ networkx
 numpy 
 pandas
 matplotlib
-scipy
+scipy==1.11
 torchtyping
+geomstats
+tqdm
