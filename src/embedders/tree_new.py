@@ -11,8 +11,22 @@ from .midpoint import midpoint
 from torchtyping import TensorType as TT
 from typing import Tuple, List, Optional
 
+def _angular_greater(queries: TT["query_batch"], keys: TT["key_batch"]) -> TT["query_batch key_batch"]:
+    """
+    Given an angle theta, check whether a tensor of inputs is in [theta, theta + pi)
+    
+    Args:
+        queries: (query_batch,) tensor of angles used to define a decision hyperplane
+        keys: (key_batch,) tensor of angles to be compared to queries
 
-def get_info_gains(
+    Outputs:
+        comparisons: (query_batch, key_batch) tensor of Booleans checking whether each key is in range 
+        [query, query + pi)
+    """
+    return ((keys[None, :] - queries[:, None] + torch.pi) % (2 * torch.pi)) >= torch.pi
+
+
+def _get_info_gains(
     comparisons: TT["query_batch dims key_batch"],
     labels: TT["query_batch n_classes"],
     eps: float = 1e-10,
@@ -54,60 +68,19 @@ def get_info_gains(
 
     return ig
 
-
-def get_best_split(
-    ig: TT["query_batch dims"],
-    angles: TT["query_batch intrinsic_dim"],
-    comparisons: TT["query_batch dims key_batch"],
-    pm: ProductManifold,
-) -> Tuple[int, int, float]:
-    """
-    All of the postprocessing for an information gain check
-
-    Args:
-        ig: (query_batch, dims) tensor of information gains
-        angles: (query_batch, dims) tensor of angles
-        comparisons: (query_batch, dims, key_batch) tensor of comparisons
-        pm: ProductManifold object, for determining midpoint approach
-
-    Returns:
-        n: scalar index of best split (positive class)
-        d: scalar dimension of best split
-        theta: scalar angle of best split
-    """
-    # First, figure out the dimension (d) and sample (n)
-    best_split = ig.argmax()
-    nd = ig.shape[1]
-    n, d = best_split // nd, best_split % nd
-
-    # Get the corresponding angle
-    theta_pos = angles[n, d]
-
-    # We have the angle, but ideally we would like the *midpoint* angle.
-    # So we need to grab the closest angle from the negative class:
-    n_neg = (angles[comparisons[n, d] == 0.0, d] - theta_pos).abs().argmin()
-    theta_neg = angles[comparisons[n, d] == 0.0, d][n_neg]
-
-    # Get manifold
-    manifold = pm.P[pm.intrinsic2man[d.item()]]
-
-    # Print what you're doing
-    m = midpoint(theta_pos, theta_neg, manifold)
-
-    return n, d, m
-
-
-def get_split(
+def _get_split(
     angles: TT["query_batch dims"],
     comparisons: TT["query_batch dims key_batch"],
     labels: TT["query_batch n_classes"],
     n: int,
     d: int,
 ) -> Tuple[
-    TT["query_batch dims key_batch"],
-    TT["query_batch n_classes"],
-    TT["query_batch dims key_batch"],
-    TT["query_batch n_classes"],
+    Tuple[
+        TT["query_batch_neg dims"], TT["query_batch_neg dims key_batch"], TT["query_batch_neg n_classes"]
+    ], 
+    Tuple[
+        TT["query_batch_pos dims"], TT["query_batch_pos dims key_batch"], TT["query_batch_pos n_classes"]
+    ]
 ]:
     """
     Split comparisons and labels into negative and positive classes
@@ -120,12 +93,16 @@ def get_split(
         d: scalar dimension of split
 
     Returns:
-        angle_neg: (query_batch_neg, dims) tensor of angles for negative class
-        angles_pos: (query_batch_pos, dims) tensor of angles for positive class
-        comparisons_neg: (query_batch_neg, dims, key_batch_neg) tensor of comparisons for negative class
-        labels_neg: (query_batch_neg, n_classes) tensor of one-hot labels for negative class
-        comparisons_pos: (query_batch_pos, dims, key_batch_pos) tensor of comparisons for positive class
-        labels_pos: (query_batch_pos, n_classes) tensor of one-hot labels for positive class
+        neg = (
+            angle_neg: (query_batch_neg, dims) tensor of angles for negative class
+            comparisons_neg: (query_batch_neg, dims, key_batch_neg) tensor of comparisons for negative class
+            labels_neg: (query_batch_neg, n_classes) tensor of one-hot labels for negative class
+        ),
+        pos = (
+            angles_pos: (query_batch_pos, dims) tensor of angles for positive class
+            comparisons_pos: (query_batch_pos, dims, key_batch_pos) tensor of comparisons for positive class
+            labels_pos: (query_batch_pos, n_classes) tensor of one-hot labels for positive class
+        )
     """
     # Get the split mask without creating an intermediate boolean tensor
     mask = comparisons[n, d].bool()
@@ -143,7 +120,7 @@ def get_split(
     labels_neg = labels[neg_indices]
     labels_pos = labels[pos_indices]
 
-    return angles_neg, angles_pos, comparisons_neg, labels_neg, comparisons_pos, labels_pos
+    return (angles_neg, comparisons_neg, labels_neg), (angles_pos, comparisons_pos, labels_pos)
 
 
 # Copied over from hyperdt.torch.tree
@@ -164,8 +141,9 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
+        self.nodes = []
 
-    def preprocess(
+    def _preprocess(
         self,
         X: TT["batch ambient_dim"],
         y: Optional[TT["batch"]] = None,
@@ -198,24 +176,24 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         # Process X-values into angles based on the signature
         angles = torch.zeros((X.shape[0], self.pm.dim), device=X.device)
         for i, M in enumerate(self.pm.P):
+            target_idx = self.pm.man2intrinsic[i]
+            dims = self.pm.man2dim[i]
             if M.type in ["H", "S"]:
-                idx0 = self.pm.man2intrinsic[i]
-                idx1 = self.pm.man2dim[i][0]
-                idx2 = self.pm.man2dim[i][1:]
-                angles[:, idx0] = torch.atan2(X[:, idx1 : idx1 + 1], X[:, idx2])
+                num = X[:, dims[0] : dims[0] + 1]
+                denom = X[:, dims[1:]]
             elif M.type == "E":
-                idx0 = self.pm.man2intrinsic[i]
-                idx1 = self.pm.man2dim[i]
-                angles[:, idx0] = torch.atan2(torch.ones(1, device=X.device), X[:, idx1])
+                num = torch.ones(1, device=X.device)
+                denom = X[:, dims]
+            angles[:, target_idx] = torch.atan2(num, denom)
 
         # Create a tensor of comparisons
-        comparisons = ((angles[:, None] - angles[None, :] + torch.pi) % (2 * torch.pi)) >= torch.pi
+        comparisons = _angular_greater(angles, angles)
 
         # Reshape the comparisons tensor
-        comparisons_reshaped = comparisons.permute(0, 2, 1)
+        # comparisons_reshaped = comparisons.permute(0, 2, 1)
+        comparisons_reshaped = comparisons.permute(1, 2, 0)
 
         # One-hot encode labels
-        # n_classes = y.unique().numel()
         if y is not None:
             classes, y_relabeled = y.unique(return_inverse=True)
             n_classes = len(classes)
@@ -226,74 +204,115 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         return angles, labels_onehot.float(), classes, comparisons_reshaped.float()
 
+    def _get_best_split(
+        self,
+        ig: TT["query_batch dims"],
+        angles: TT["query_batch intrinsic_dim"],
+        comparisons: TT["query_batch dims key_batch"],
+    ) -> Tuple[int, int, float]:
+        """
+        All of the postprocessing for an information gain check
+
+        Args:
+            ig: (query_batch, dims) tensor of information gains
+            angles: (query_batch, dims) tensor of angles
+            comparisons: (query_batch, dims, key_batch) tensor of comparisons
+
+        Returns:
+            n: scalar index of best split (positive class)
+            d: scalar dimension of best split
+            theta: scalar angle of best split
+        """
+        # First, figure out the dimension (d) and sample (n)
+        best_split = ig.argmax()
+        nd = ig.shape[1]
+        n, d = best_split // nd, best_split % nd
+
+        # Get the corresponding angle
+        theta_pos = angles[n, d]
+
+        # We have the angle, but ideally we would like the *midpoint* angle.
+        # So we need to grab the closest angle from the negative class:
+        n_neg = (angles[comparisons[n, d] == 0.0, d] - theta_pos).abs().argmin()
+        theta_neg = angles[comparisons[n, d] == 0.0, d][n_neg]
+
+        # Get manifold
+        manifold = self.pm.P[self.pm.intrinsic2man[d.item()]]
+
+        # Get midpoint
+        m = midpoint(theta_pos, theta_neg, manifold)
+
+        return n, d, m
+
+
     @torch.no_grad()
-    def fit(self, X, y):
+    def fit(self, X: TT["batch ambient_dim"], y: TT["batch"]) -> None:
         """Reworked fit function for new version of ProductDT"""
 
         # Preprocess data
-        angles, labels_onehot, classes, comparisons_reshaped = self.preprocess(X=X, y=y)
+        angles, labels_onehot, classes, comparisons_reshaped = self._preprocess(X=X, y=y)
 
         # Store classes for predictions
         self.classes_ = classes
 
         # Fit node
-        self.tree = self.fit_node(angles, labels_onehot, comparisons_reshaped, self.max_depth)
+        self.tree = self._fit_node(angles, labels_onehot, comparisons_reshaped, self.max_depth)
 
-    def fit_node(self, angles, labels, comparisons, depth):
+    def _fit_node(
+            self, 
+            angles: TT["batch intrinsic_dim"], 
+            labels: TT["batch n_classes"], 
+            comparisons: TT["query_batch dim key_batch"], 
+            depth: int
+        ) -> DecisionNode:
+        """The recursive component of the product space decision tree fitting function"""
         # Check halting conditions
         if depth == 0 or len(comparisons) < self.min_samples_split:
-            value, probs = self._leaf_values(labels)
+            probs, value = self._leaf_values(labels)
             return DecisionNode(value=value.item(), probs=probs)
 
         # The main loop is just the functions we've already defined
-        ig = get_info_gains(comparisons=comparisons, labels=labels)
-        n, d, theta = get_best_split(ig=ig, angles=angles, comparisons=comparisons, pm=self.pm)
-        angles_neg, angles_pos, comparisons_neg, labels_neg, comparisons_pos, labels_pos = get_split(
+        ig = _get_info_gains(comparisons=comparisons, labels=labels)
+        n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons)
+        (angles_neg, comparisons_neg, labels_neg), (angles_pos, comparisons_pos, labels_pos) = _get_split(
             angles=angles, comparisons=comparisons, labels=labels, n=n, d=d
         )
-        value, probs = self._leaf_values(labels)
-        node = DecisionNode(
-            value=value.item(),
-            probs=probs,
-            feature=d.item(),
-            theta=theta.item(),
-            left=self.fit_node(angles_neg, labels_neg, comparisons_neg, depth - 1),
-            right=self.fit_node(angles_pos, labels_pos, comparisons_pos, depth - 1),
-        )
+        node = DecisionNode(feature=d.item(), theta=theta.item())
+        self.nodes.append(node)
+
+        # Do left and right recursion after appending node to self.nodes
+        # This ensures that the order of self.nodes is correct
+        node.left = self._fit_node(angles_neg, labels_neg, comparisons_neg, depth - 1)
+        node.right = self._fit_node(angles_pos, labels_pos, comparisons_pos, depth - 1)
         return node
 
-    def _leaf_values(self, y):
-        y_sum = y.sum(dim=0)
-        value = torch.argmax(y_sum)
-        probs = y_sum / y_sum.sum()
-        return value, probs
+    def _leaf_values(self, y: TT["batch"]) -> Tuple[TT["batch", "n_classes"], TT["batch"]]:
+        """Get majority class and class probabilities"""
+        probs = y.sum(dim=0) / y.sum()
+        return probs, probs.argmax()
 
-    def _left(self, angle, node):
-        """Boolean: Go left?"""
-        return (angle[:, node.feature] - node.theta + torch.pi) % (2 * torch.pi) >= torch.pi
+    def _left(self, angles_row: TT["intrinsic_dim"], node: DecisionNode) -> bool:
+        """Boolean: Go left? Works on a preprocessed input vector. """
+        return _angular_greater(torch.tensor(node.theta).flatten(), angles_row[node.feature].flatten()).item()
 
-    def _traverse(self, x, node=None):
+    def _traverse(self, x: TT["intrinsic_dim"], node: DecisionNode) -> DecisionNode:
         """Traverse a decision tree for a single point"""
-        # Root case
-        if node is None:
-            node = self.tree
-
         # Leaf case
         if node.value is not None:
             return node
 
         return self._traverse(x, node.left) if self._left(x, node) else self._traverse(x, node.right)
 
-    def predict(self, X):
-        # angle_vals = self._get_angle_vals(X)
-        angles, labels_onehot, classes, comparisons_reshaped = self.preprocess(X=X)
-        return self.classes_[torch.tensor([self._traverse(x).value for x in angles], device=X.device)]
-
-    def predict_proba(self, X):
+    def predict_proba(self, X: TT["batch intrinsic_dim"]) -> TT["batch n_classes"]:
         """Predict class probabilities for samples in X"""
-        return torch.tensor([self._traverse(x).probs for x in X])
+        angles, _, _, _ = self._preprocess(X=X)
+        return torch.vstack([self._traverse(angles_row, self.tree).probs for angles_row in angles])
 
-    def score(self, X, y):
+    def predict(self, X: TT["batch intrinsic_dim"]) -> TT["batch"]:
+        """Predict class labels for samples in X"""
+        return self.classes_[self.predict_proba(X).argmax(dim=1)]
+
+    def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""
         return self.predict(X) == y
 

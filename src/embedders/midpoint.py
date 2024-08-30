@@ -22,7 +22,7 @@ def spherical_midpoint(u, v):
 
 
 def euclidean_midpoint(u, v):
-    return torch.arctan2(1, (torch.tan(u) + torch.tan(v)) / 2)
+    return torch.arctan2(torch.tensor(2), (1 / torch.tan(u) + 1 / torch.tan(v)))
 
 
 def midpoint(u, v, manifold):
@@ -32,5 +32,8 @@ def midpoint(u, v, manifold):
         return hyperbolic_midpoint(u, v)
     elif manifold.type == "S":
         return spherical_midpoint(u, v)
-    else:
+    elif manifold.type == "E":
         return euclidean_midpoint(u, v)
+    else:
+        raise ValueError(f"No midpoint formula for manifold type '{manifold.type}'")
+    
