@@ -3,13 +3,11 @@ import torch
 # from joblib import Parallel, delayed
 from sklearn.base import BaseEstimator, ClassifierMixin
 
-# from hyperdt.torch.product_space_DT import ProductSpaceDT
-from .manifolds import ProductManifold
 from .midpoint import midpoint
 
 # Typing stuff
 from torchtyping import TensorType as TT
-from typing import Tuple, List, Optional
+from typing import Tuple, Optional, Literal
 
 def _angular_greater(queries: TT["query_batch"], keys: TT["key_batch"]) -> TT["query_batch key_batch"]:
     """
@@ -209,6 +207,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         ig: TT["query_batch dims"],
         angles: TT["query_batch intrinsic_dim"],
         comparisons: TT["query_batch dims key_batch"],
+        permutations: Optional[TT["n_dims"]],
     ) -> Tuple[int, int, float]:
         """
         All of the postprocessing for an information gain check
@@ -233,11 +232,20 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # We have the angle, but ideally we would like the *midpoint* angle.
         # So we need to grab the closest angle from the negative class:
-        n_neg = (angles[comparisons[n, d] == 0.0, d] - theta_pos).abs().argmin()
-        theta_neg = angles[comparisons[n, d] == 0.0, d][n_neg]
+        if (comparisons[n, d] == 1.0).all():
+            theta_neg = theta_pos 
+            # TODO: replace this with something better, e.g. make "circular_greater" strict and make the pos_class the
+            # smallest theta where this is 1.
+        else:
+            n_neg = (angles[comparisons[n, d] == 0.0, d] - theta_pos).abs().argmin()
+            theta_neg = angles[comparisons[n, d] == 0.0, d][n_neg]
 
         # Get manifold
-        manifold = self.pm.P[self.pm.intrinsic2man[d.item()]]
+        if permutations is not None:
+            active_dim = permutations[d].item()
+        else:
+            active_dim = d.item()
+        manifold = self.pm.P[self.pm.intrinsic2man[active_dim]]
 
         # Get midpoint
         m = midpoint(theta_pos, theta_neg, manifold)
@@ -256,14 +264,17 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.classes_ = classes
 
         # Fit node
-        self.tree = self._fit_node(angles, labels_onehot, comparisons_reshaped, self.max_depth)
+        self.tree = self._fit_node(
+            angles=angles, labels=labels_onehot, comparisons=comparisons_reshaped, depth=self.max_depth
+        )
 
     def _fit_node(
             self, 
             angles: TT["batch intrinsic_dim"], 
             labels: TT["batch n_classes"], 
             comparisons: TT["query_batch dim key_batch"], 
-            depth: int
+            depth: int,
+            permutations: Optional[TT["n_dims"]] = None
         ) -> DecisionNode:
         """The recursive component of the product space decision tree fitting function"""
         # Check halting conditions
@@ -273,7 +284,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # The main loop is just the functions we've already defined
         ig = _get_info_gains(comparisons=comparisons, labels=labels)
-        n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons)
+        n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons, permutations=permutations)
         (angles_neg, comparisons_neg, labels_neg), (angles_pos, comparisons_pos, labels_pos) = _get_split(
             angles=angles, comparisons=comparisons, labels=labels, n=n, d=d
         )
@@ -282,8 +293,20 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # Do left and right recursion after appending node to self.nodes
         # This ensures that the order of self.nodes is correct
-        node.left = self._fit_node(angles_neg, labels_neg, comparisons_neg, depth - 1)
-        node.right = self._fit_node(angles_pos, labels_pos, comparisons_pos, depth - 1)
+        node.left = self._fit_node(
+            angles=angles_neg, 
+            labels=labels_neg, 
+            comparisons=comparisons_neg, 
+            depth=depth - 1, 
+            permutations=permutations
+        )
+        node.right = self._fit_node(
+            angles=angles_pos, 
+            labels=labels_pos, 
+            comparisons=comparisons_pos, 
+            depth=depth - 1,
+            permutations=permutations
+        )
         return node
 
     def _leaf_values(self, y: TT["batch"]) -> Tuple[TT["batch", "n_classes"], TT["batch"]]:
@@ -317,68 +340,74 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         return self.predict(X) == y
 
 
-# class TorchProductSpaceRF(BaseEstimator, ClassifierMixin):
-#     def __init__(
-#         self,
-#         signature,
-#         n_estimators=100,
-#         max_features="sqrt",
-#         max_samples=1.0,
-#         random_state=None,
-#         max_depth=3,
-#         n_jobs=-1,
-#     ):
-#         self.n_estimators = n_estimators
-#         self.max_features = max_features
-#         self.max_samples = max_samples
-#         self.random_state = random_state
-#         self.max_depth = max_depth
-#         self.n_jobs = n_jobs
-#         self.trees = [TorchProductSpaceDT(signature, max_depth=max_depth) for _ in range(n_estimators)]
+class ProductSpaceRF(BaseEstimator, ClassifierMixin):
+    def __init__(
+        self,
+        pm,
+        n_estimators=100,
+        max_features="sqrt",
+        max_samples=1.0,
+        random_state=None,
+        max_depth=3,
+        n_jobs=-1,
+        **kwargs
+    ):
+        self.pm = pm
+        self.n_estimators = n_estimators
+        self.max_features = max_features
+        self.max_samples = max_samples
+        self.random_state = random_state
+        self.max_depth = max_depth
+        self.n_jobs = n_jobs
+        self.trees = [ProductSpaceDT(pm=pm, **kwargs) for _ in range(n_estimators)]
 
-#     def _generate_subsample(self, X, y):
-#         n_samples = X.shape[0]
-#         sample_size = int(n_samples * self.max_samples)
-#         # indices = np.random.choice(n_samples, size=sample_size, replace=True)
-#         indices = torch.randint(0, n_samples, (sample_size,))
-#         return X[indices], y[indices]
+    def _generate_subsample(self, n_rows, n_cols, n_trees):
+        # Get number of dimensions in our subsample
+        if isinstance(self.max_features, int) and self.max_features <= n_cols:
+            n_cols_sample = n_cols
+        elif self.max_features == "sqrt":
+            n_cols_sample = torch.ceil(torch.tensor(n_cols ** 0.5)).int()
+        elif self.max_features == "log2":
+            n_cols_sample = torch.ceil(torch.log2(torch.tensor(d))).int()
+        elif self.max_features == "none":
+            n_cols_sample = n_cols
+        else:
+            raise ValueError(f"Unknown max_features parameter: {self.max_features}")
+    
+        # Subsample
+        idx_sample = torch.randint(0, n_rows, (n_trees, n_rows))
+        idx_dim = torch.stack([torch.randperm(n_cols)[:n_cols_sample] for _ in range(n_trees)])
 
-#     def fit(self, X, y):
-#         for tree in self.trees:
-#             X_sample, y_sample = self._generate_subsample(X, y)
-#             tree.fit(X_sample, y_sample)
-#         return self
+        return idx_sample, idx_dim
 
-#     # def fit(self, X, y, use_tqdm=False, seed=None):
-#     #     """Fit a decision tree to subsamples"""
-#     #     self.classes_ = torch.unique(y)
+    def fit(self, X: TT["batch ambient_dim"], y: TT["batch"]):
+        """Preprocess and fit an ensemble of trees on subsampled data"""
+        # Can use any tree to preprocess X and y
+        angles, labels, classes, comparisons = self.trees[0]._preprocess(X=X, y=y)
+        self.classes_ = classes
 
-#     #     if seed is not None:
-#     #         self.random_state = seed
-#     #     if self.random_state is not None:
-#     #         # np.random.seed(self.random_state)
-#     #         torch.manual_seed(self.random_state)
+        # Subsample - just the indices
+        n, d = angles.shape
+        idx_sample_all, idx_dim_all = self._generate_subsample(n_rows=n, n_cols=d, n_trees=self.n_estimators)
 
-#     #     # Fit decision trees individually (parallelized):
-#     #     trees = tqdm(self.trees) if use_tqdm else self.trees
-#     #     if self.n_jobs != 1:
-#     #         fitted_trees = Parallel(n_jobs=self.n_jobs)(
-#     #             delayed(tree.fit)(*self._generate_subsample(X, y)) for tree in trees
-#     #         )
-#     #         self.trees = fitted_trees
-#     #     else:
-#     #         for tree in trees:
-#     #             X_sample, y_sample = self._generate_subsample(X, y)
-#     #             tree.fit(X_sample, y_sample)
-#     #     return self
+        # Fit trees
+        for tree, idx_sample, idx_dim in zip(self.trees, idx_sample_all, idx_dim_all):
+            tree.tree = tree._fit_node(
+                angles = angles[idx_sample][:, idx_dim],
+                labels=labels[idx_sample],
+                comparisons=comparisons[idx_sample][:, idx_dim][:, :, idx_sample],
+                depth=self.max_depth,
+                permutations=idx_dim
+            )
+        return self
 
-#     def predict(self, X):
-#         predictions = torch.stack([tree.predict(X) for tree in self.trees])
-#         return torch.mode(predictions, dim=0).values
+    # def predict(self, X):
+    #     predictions = torch.stack([tree.predict(X) for tree in self.trees])
+    #     return torch.mode(predictions, dim=0).values
 
-#     def predict_proba(self, X):
-#         predictions = torch.stack([tree.predict_proba(X) for tree in self.trees])
-#         return predictions.mean(dim=0)
+    # def predict_proba(self, X):
+    #     predictions = torch.stack([tree.predict_proba(X) for tree in self.trees])
+    #     return predictions.mean(dim=0)
 
-#     def score(self, X, y):
-#         return torch.mean(self.predict(X) == y)
+    # def score(self, X, y):
+    #     return torch.mean(self.predict(X) == y)
