@@ -206,8 +206,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self,
         ig: TT["query_batch dims"],
         angles: TT["query_batch intrinsic_dim"],
-        comparisons: TT["query_batch dims key_batch"],
-        permutations: Optional[TT["n_dims"]],
+        comparisons: TT["query_batch dims key_batch"]
     ) -> Tuple[int, int, float]:
         """
         All of the postprocessing for an information gain check
@@ -241,8 +240,8 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             theta_neg = angles[comparisons[n, d] == 0.0, d][n_neg]
 
         # Get manifold
-        if permutations is not None:
-            active_dim = permutations[d].item()
+        if self.permutations is not None:
+            active_dim = self.permutations[d].item()
         else:
             active_dim = d.item()
         manifold = self.pm.P[self.pm.intrinsic2man[active_dim]]
@@ -254,7 +253,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
 
     @torch.no_grad()
-    def fit(self, X: TT["batch ambient_dim"], y: TT["batch"]) -> None:
+    def fit(self, X: TT["batch ambient_dim"], y: TT["batch"], preprocess=True) -> None:
         """Reworked fit function for new version of ProductDT"""
 
         # Preprocess data
@@ -273,8 +272,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             angles: TT["batch intrinsic_dim"], 
             labels: TT["batch n_classes"], 
             comparisons: TT["query_batch dim key_batch"], 
-            depth: int,
-            permutations: Optional[TT["n_dims"]] = None
+            depth: int
         ) -> DecisionNode:
         """The recursive component of the product space decision tree fitting function"""
         # Check halting conditions
@@ -284,7 +282,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # The main loop is just the functions we've already defined
         ig = _get_info_gains(comparisons=comparisons, labels=labels)
-        n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons, permutations=permutations)
+        n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons)
         (angles_neg, comparisons_neg, labels_neg), (angles_pos, comparisons_pos, labels_pos) = _get_split(
             angles=angles, comparisons=comparisons, labels=labels, n=n, d=d
         )
@@ -294,18 +292,10 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         # Do left and right recursion after appending node to self.nodes
         # This ensures that the order of self.nodes is correct
         node.left = self._fit_node(
-            angles=angles_neg, 
-            labels=labels_neg, 
-            comparisons=comparisons_neg, 
-            depth=depth - 1, 
-            permutations=permutations
+            angles=angles_neg, labels=labels_neg, comparisons=comparisons_neg, depth=depth - 1
         )
         node.right = self._fit_node(
-            angles=angles_pos, 
-            labels=labels_pos, 
-            comparisons=comparisons_pos, 
-            depth=depth - 1,
-            permutations=permutations
+            angles=angles_pos, labels=labels_pos, comparisons=comparisons_pos, depth=depth - 1
         )
         return node
 
@@ -329,6 +319,8 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X: TT["batch intrinsic_dim"]) -> TT["batch n_classes"]:
         """Predict class probabilities for samples in X"""
         angles, _, _, _ = self._preprocess(X=X)
+        if self.permutations is not None:
+            angles = angles[:, self.permutations]
         return torch.vstack([self._traverse(angles_row, self.tree).probs for angles_row in angles])
 
     def predict(self, X: TT["batch intrinsic_dim"]) -> TT["batch"]:
@@ -344,15 +336,21 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         pm,
+        max_depth=3,
+        min_samples_leaf=1, 
+        min_samples_split=2,
         n_estimators=100,
         max_features="sqrt",
         max_samples=1.0,
         random_state=None,
-        max_depth=3,
         n_jobs=-1,
         **kwargs
     ):
+        # Store hyperparameters
         self.pm = pm
+        self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
+        self.min_samples_split = min_samples_split
         self.n_estimators = n_estimators
         self.max_features = max_features
         self.max_samples = max_samples
@@ -374,7 +372,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         else:
             raise ValueError(f"Unknown max_features parameter: {self.max_features}")
     
-        # Subsample
+        # Subsample - returns indices
         idx_sample = torch.randint(0, n_rows, (n_trees, n_rows))
         idx_dim = torch.stack([torch.randperm(n_cols)[:n_cols_sample] for _ in range(n_trees)])
 
@@ -392,22 +390,24 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
 
         # Fit trees
         for tree, idx_sample, idx_dim in zip(self.trees, idx_sample_all, idx_dim_all):
+            tree.permutations = idx_dim
+            tree.classes_ = classes
             tree.tree = tree._fit_node(
                 angles = angles[idx_sample][:, idx_dim],
                 labels=labels[idx_sample],
                 comparisons=comparisons[idx_sample][:, idx_dim][:, :, idx_sample],
-                depth=self.max_depth,
-                permutations=idx_dim
+                depth=self.max_depth
             )
         return self
 
-    # def predict(self, X):
-    #     predictions = torch.stack([tree.predict(X) for tree in self.trees])
-    #     return torch.mode(predictions, dim=0).values
+    def predict_proba(self, X: TT["batch intrinsic_dim"]) -> TT["batch n_classes"]:
+        """Predict class probabilities for samples in X"""
+        return torch.stack([tree.predict_proba(X) for tree in self.trees]).mean(dim=0)
 
-    # def predict_proba(self, X):
-    #     predictions = torch.stack([tree.predict_proba(X) for tree in self.trees])
-    #     return predictions.mean(dim=0)
+    def predict(self, X: TT["batch intrinsic_dim"]) -> TT["batch"]:
+        """Predict class labels for samples in X"""
+        return self.classes_[self.predict_proba(X).argmax(dim=1)]
 
-    # def score(self, X, y):
-    #     return torch.mean(self.predict(X) == y)
+    def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
+        """Return the mean accuracy on the given test data and labels"""
+        return self.predict(X) == y
