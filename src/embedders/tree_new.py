@@ -139,7 +139,10 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
-        self.nodes = []
+
+        # These will become important later
+        self.nodes = [] # For fitted nodes
+        self.permutations = None # If used as part of a random forest
 
     def _preprocess(
         self,
@@ -253,8 +256,17 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
 
     @torch.no_grad()
-    def fit(self, X: TT["batch ambient_dim"], y: TT["batch"], preprocess=True) -> None:
-        """Reworked fit function for new version of ProductDT"""
+    def fit(self, X: TT["batch ambient_dim"], y: TT["batch"]) -> None:
+        """
+        Reworked fit function for new version of ProductDT
+        
+        Args:
+            X: (batch, ambient_dim) tensor of trainind data (ambient coordinate representation)
+            y: (batch,) tensor of labels (integer representation)
+        
+        Returns:
+            None (fits tree in place)
+        """
 
         # Preprocess data
         angles, labels_onehot, classes, comparisons_reshaped = self._preprocess(X=X, y=y)
@@ -274,7 +286,12 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             comparisons: TT["query_batch dim key_batch"], 
             depth: int
         ) -> DecisionNode:
-        """The recursive component of the product space decision tree fitting function"""
+        """
+        The recursive component of the product space decision tree fitting function
+        
+        Args:
+        
+        """
         # Check halting conditions
         if depth == 0 or len(comparisons) < self.min_samples_split:
             probs, value = self._leaf_values(labels)

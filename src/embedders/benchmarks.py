@@ -7,13 +7,14 @@ import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 
-from hyperdt.product_space_DT import ProductSpaceDT
-from hyperdt.forest import ProductSpaceRF
+# from hyperdt.product_space_DT import ProductSpaceDT
+# from hyperdt.forest import ProductSpaceRF
 
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 
-from .tree import TorchProductSpaceDT, TorchProductSpaceRF
+# from .tree import TorchProductSpaceDT, TorchProductSpaceRF
+from .tree_new import ProductSpaceDT, ProductSpaceRF
 from .manifolds import ProductManifold
 
 def _fix_X(X, signature):
@@ -54,8 +55,8 @@ def benchmark(
         "product_rf",
         "tangent_dt",
         "tangent_rf",
-        "product_dt_legacy",
-        "product_rf_legacy",
+        # "product_dt_legacy",
+        # "product_rf_legacy",
         "restricted_dt",
         "restricted_rf",
     ],
@@ -119,12 +120,14 @@ def benchmark(
         accs["sklearn_rf"] = _score(X_test_np, y_test_np, rf, torch=False)
 
     if "product_dt" in classifiers:
-        psdt = TorchProductSpaceDT(signature=pm.signature, max_depth=max_depth)
+        # psdt = TorchProductSpaceDT(signature=pm.signature, max_depth=max_depth)
+        psdt = ProductSpaceDT(pm=pm)
         psdt.fit(X_train, y_train)
         accs["product_dt"] = _score(X_test, y_test_np, psdt, torch=True)
 
     if "product_rf" in classifiers:
-        psrf = TorchProductSpaceRF(signature=pm.signature, n_estimators=n_estimators, max_depth=max_depth)
+        # psrf = TorchProductSpaceRF(signature=pm.signature, n_estimators=n_estimators, max_depth=max_depth)
+        psrf = ProductSpaceRF(pm=pm)
         psrf.fit(X_train, y_train)
         accs["product_rf"] = _score(X_test, y_test_np, psrf, torch=True)
 
@@ -138,15 +141,15 @@ def benchmark(
         trf.fit(X_train_tangent_np, y_train_np)
         accs["tangent_rf"] = _score(X_test_tangent_np, y_test_np, trf, torch=False)
     
-    if "product_dt_legacy" in classifiers:
-        psdt = ProductSpaceDT([(x[1], x[0]) for x in pm.signature], max_depth=max_depth)
-        psdt.fit(X_train_fixed, y_train_np)
-        accs["product_dt_legacy"] = _score(X_test_fixed, y_test_np, psdt, torch=False)
+    # if "product_dt_legacy" in classifiers:
+    #     psdt = ProductSpaceDT([(x[1], x[0]) for x in pm.signature], max_depth=max_depth)
+    #     psdt.fit(X_train_fixed, y_train_np)
+    #     accs["product_dt_legacy"] = _score(X_test_fixed, y_test_np, psdt, torch=False)
     
-    if "product_rf_legacy" in classifiers:
-        psrf = ProductSpaceRF([(x[1], x[0]) for x in pm.signature], n_estimators=n_estimators, max_depth=max_depth)
-        psrf.fit(X_train_fixed, y_train_np)
-        accs["product_rf_legacy"] = _score(X_test_fixed, y_test_np, psrf, torch=False)
+    # if "product_rf_legacy" in classifiers:
+    #     psrf = ProductSpaceRF([(x[1], x[0]) for x in pm.signature], n_estimators=n_estimators, max_depth=max_depth)
+    #     psrf.fit(X_train_fixed, y_train_np)
+    #     accs["product_rf_legacy"] = _score(X_test_fixed, y_test_np, psrf, torch=False)
     
     if "restricted_dt" in classifiers:
         dt = DecisionTreeClassifier(max_depth=max_depth)

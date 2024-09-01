@@ -1,7 +1,7 @@
 import torch
 import geoopt
 
-from torchtyping import TensorType
+from torchtyping import TensorType as TT
 from typing import List, Optional, Tuple, Union
 
 
@@ -43,8 +43,8 @@ class Manifold:
         return self
 
     def dist(
-        self, X: TensorType["n_points1", "n_dim"], Y: TensorType["n_points2", "n_dim"]
-    ) -> TensorType["n_points1", "n_points2"]:
+        self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]
+    ) -> TT["n_points1", "n_points2"]:
         """Inherit distance function from the geoopt manifold."""
         if self.type == "E":
             return self.manifold.dist(X, Y).norm(dim=-1)
@@ -52,29 +52,29 @@ class Manifold:
             return self.manifold.dist(X, Y)
 
     def dist2(
-        self, X: TensorType["n_points1", "n_dim"], Y: TensorType["n_points2", "n_dim"]
-    ) -> TensorType["n_points1", "n_points2"]:
+        self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]
+    ) -> TT["n_points1", "n_points2"]:
         """Inherit squared distance function from the geoopt manifold."""
         if self.type == "E":
             return self.manifold.dist2(X, Y).sum(dim=-1)
         else:
             return self.manifold.dist2(X, Y)
 
-    def pdist(self, X: TensorType["n_points", "n_dim"]) -> TensorType["n_points", "n_points"]:
+    def pdist(self, X: TT["n_points", "n_dim"]) -> TT["n_points", "n_points"]:
         """Compute pairwise  distances between embeddings."""
         if self.type == "E":
             return self.dist(X[:, None], X[None, :]).norm(dim=-1)
         else:
             return self.dist(X[:, None], X[None, :])
 
-    def pdist2(self, X: TensorType["n_points", "n_dim"]) -> TensorType["n_points", "n_points"]:
+    def pdist2(self, X: TT["n_points", "n_dim"]) -> TT["n_points", "n_points"]:
         """Compute pairwise SQUARED distances between embeddings."""
         if self.type == "E":
             return self.dist2(X[:, None], X[None, :]).sum(dim=-1)
         else:
             return self.dist2(X[:, None], X[None, :])
 
-    def _to_tangent_plane_mu0(self, x: TensorType["n_points", "n_dim"]) -> TensorType["n_points", "n_ambient_dim"]:
+    def _to_tangent_plane_mu0(self, x: TT["n_points", "n_dim"]) -> TT["n_points", "n_ambient_dim"]:
         x = torch.Tensor(x).reshape(-1, self.dim)
         if self.type == "E":
             return x
@@ -83,10 +83,12 @@ class Manifold:
 
     def sample(
         self,
-        z_mean: Optional[TensorType["n_points", "n_ambient_dim"]] = None,
-        sigma: Optional[TensorType["n_points", "n_dim", "n_dim"]] = None,
-    ) -> TensorType["n_points", "n_ambient_dim"]:
+        z_mean: Optional[TT["n_points", "n_ambient_dim"]] = None,
+        sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None,
+    ) -> TT["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
+        if z_mean is None:
+            z_mean = self.mu0
         z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
         n = z_mean.shape[0]
         if sigma is None:
@@ -118,10 +120,10 @@ class Manifold:
 
     def log_likelihood(
         self,
-        z: TensorType["n_points", "n_ambient_dim"],
-        mu: Optional[TensorType["n_points", "n_ambient_dim"]] = None,
-        sigma: Optional[TensorType["n_points", "n_dim", "n_dim"]] = None,
-    ) -> TensorType["n_points"]:
+        z: TT["n_points", "n_ambient_dim"],
+        mu: Optional[TT["n_points", "n_ambient_dim"]] = None,
+        sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None,
+    ) -> TT["n_points"]:
         """Probability density function for WN(z ; mu, Sigma) in manifold"""
 
         # Default to mu=self.mu0 and sigma=I
@@ -163,6 +165,17 @@ class Manifold:
 
             return ll - (n - 1) * torch.log(R * torch.abs(sin_M(u_norm / R) / u_norm) + 1e-8)
 
+    def logmap(self, x, base=None):
+        """Logarithmic map of point on manifold x at base point"""
+        if base is None:
+            base = self.mu0
+        return self.manifold.logmap(x=base, y=x)
+
+    def expmap(self, u, base=None):
+        """Exponential map of tangent vector u at base point"""
+        if base is None:
+            base = self.mu0
+        return self.expmap(x=base, u=u)
 
 class ProductManifold(Manifold):
     def __init__(self, signature: List[Tuple[float, int]], device: str="cpu"):
@@ -220,7 +233,7 @@ class ProductManifold(Manifold):
 
     def initialize_embeddings(
             self, n_points: int, scales: Union[List[float], float] = 1.0
-        ) -> TensorType["n_points", "n_ambient_dim"]:
+        ) -> TT["n_points", "n_ambient_dim"]:
         """Randomly initialize n_points embeddings on the product manifold."""
         # Scales management
         if not isinstance(scales, list):
@@ -255,23 +268,22 @@ class ProductManifold(Manifold):
         # x_embed = geoopt.ManifoldParameter(x_embed, manifold=self.manifold)
         return x_embed
 
-    def factorize(self, X: TensorType["n_points", "n_dim"]) -> List[TensorType["n_points", "n_dim_manifold"]]:
+    def factorize(self, X: TT["n_points", "n_dim"]) -> List[TT["n_points", "n_dim_manifold"]]:
         """Factorize the embeddings into the individual manifolds."""
         return [X[..., self.man2dim[i]] for i in range(len(self.P))]
 
     def sample(
         self, 
-        z_mean: TensorType["n_points", "n_dim"], 
-        # sigma: Optional[TensorType["n_points", "n_dim", "n_dim"]] = None
-        sigma_factorized: Optional[List[TensorType["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
-    ) -> TensorType["n_points", "n_ambient_dim"]:
+        z_mean: Optional[TT["n_points", "n_dim"]] = None, 
+        # sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None
+        sigma_factorized: Optional[List[TT["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
+    ) -> TT["n_points", "n_ambient_dim"]:
         """Sample from the variational distribution."""
+        if z_mean is None:
+            z_mean = self.mu0
         z_mean = torch.Tensor(z_mean).reshape(-1, self.ambient_dim).to(self.device)
         n = z_mean.shape[0]
-        # if sigma is None:
-            # sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
-        # else:
-            # sigma = torch.Tensor(sigma).reshape(-1, self.dim, self.dim).to(self.device)
+
         if sigma_factorized is None:
             sigma_factorized = [torch.stack([torch.eye(M.dim)] * n) for M in self.P]
         else:
@@ -280,14 +292,8 @@ class ProductManifold(Manifold):
                 for M, sigma in zip(self.P, sigma_factorized)
             ]
 
-        # assert sigma.shape == (n, self.dim, self.dim)
-        # assert torch.all(sigma == sigma.transpose(-1, -2))
         assert sum([sigma.shape == (n, M.dim, M.dim) for M, sigma in zip(self.P, sigma_factorized)]) == len(self.P)
         assert z_mean.shape[-1] == self.ambient_dim
-
-        # sigma_factorized = [
-        #     sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
-        # ]
 
         # Sample initial vector from N(0, sigma)
         return torch.cat(
@@ -297,23 +303,20 @@ class ProductManifold(Manifold):
 
     def log_likelihood(
         self,
-        z: TensorType["batch_size", "n_dim"],
-        mu: Optional[TensorType["n_dim",]] = None,
-        # sigma: TensorType["n_intrinsic_dim", "n_intrinsic_dim"] = None,
-        sigma_factorized: Optional[List[TensorType["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
-    ) -> TensorType["batch_size"]:
+        z: TT["batch_size", "n_dim"],
+        mu: Optional[TT["n_dim",]] = None,
+        # sigma: TT["n_intrinsic_dim", "n_intrinsic_dim"] = None,
+        sigma_factorized: Optional[List[TT["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
+    ) -> TT["batch_size"]:
         """Probability density function for WN(z ; mu, Sigma) in manifold"""
         n = z.shape[0]
         if mu is None:
             mu = torch.stack([self.mu0] * n).to(self.device)
-        # if sigma is None:
-            # sigma = torch.stack([torch.eye(self.dim)] * n).to(self.device)
-        # sigma_factorized = [
-        #     sigma[:, self.man2intrinsic[i], :][:, :, self.man2intrinsic[i]] for i in range(self.n_manifolds)
-        # ]
+
         if sigma_factorized is None:
             sigma_factorized = [torch.stack([torch.eye(M.dim)] * n) for M in self.P]
-        # Note that this factorization assumes block-diagonal covariance matrices
+            # Note that this factorization assumes block-diagonal covariance matrices
+        
         mu_factorized = self.factorize(mu)
         z_factorized = self.factorize(z)
         component_lls = [
