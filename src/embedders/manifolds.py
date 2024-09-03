@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple, Union
 
 
 class Manifold:
-    def __init__(self, curvature: float, dim: int, device: str="cpu"):
+    def __init__(self, curvature: float, dim: int, device: str = "cpu"):
         # Device management
         self.device = device
 
@@ -42,37 +42,42 @@ class Manifold:
         self.mu0 = self.mu0.to(device)
         return self
 
-    def dist(
-        self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]
-    ) -> TT["n_points1", "n_points2"]:
+    def dist(self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]) -> TT["n_points1", "n_points2"]:
         """Inherit distance function from the geoopt manifold."""
         if self.type == "E":
-            return self.manifold.dist(X, Y).norm(dim=-1)
+            return self.manifold.dist(X[:, None], Y[None, :]).norm(dim=-1)
         else:
-            return self.manifold.dist(X, Y)
+            return self.manifold.dist(X[:, None], Y[None, :])
 
-    def dist2(
-        self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]
-    ) -> TT["n_points1", "n_points2"]:
+    def dist2(self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]) -> TT["n_points1", "n_points2"]:
         """Inherit squared distance function from the geoopt manifold."""
         if self.type == "E":
-            return self.manifold.dist2(X, Y).sum(dim=-1)
+            return self.manifold.dist2(X[:, None], Y[None, :]).sum(dim=-1)
         else:
-            return self.manifold.dist2(X, Y)
+            return self.manifold.dist2(X[:, None], Y[None, :])
 
     def pdist(self, X: TT["n_points", "n_dim"]) -> TT["n_points", "n_points"]:
         """Compute pairwise  distances between embeddings."""
         if self.type == "E":
-            return self.dist(X[:, None], X[None, :]).norm(dim=-1)
+            dists = self.dist(X, X).norm(dim=-1)
         else:
-            return self.dist(X[:, None], X[None, :])
+            dists = self.dist(X, X)
+
+        # Fill diagonal with zeros
+        dists.fill_diagonal_(0.0)
+
+        return dists
 
     def pdist2(self, X: TT["n_points", "n_dim"]) -> TT["n_points", "n_points"]:
         """Compute pairwise SQUARED distances between embeddings."""
         if self.type == "E":
-            return self.dist2(X[:, None], X[None, :]).sum(dim=-1)
+            dists2 = self.dist2(X, X).sum(dim=-1)
         else:
-            return self.dist2(X[:, None], X[None, :])
+            dists2 = self.dist2(X, X)
+
+        dists2.fill_diagonal_(0.0)
+
+        return dists2
 
     def _to_tangent_plane_mu0(self, x: TT["n_points", "n_dim"]) -> TT["n_points", "n_ambient_dim"]:
         x = torch.Tensor(x).reshape(-1, self.dim)
@@ -177,8 +182,9 @@ class Manifold:
             base = self.mu0
         return self.expmap(x=base, u=u)
 
+
 class ProductManifold(Manifold):
-    def __init__(self, signature: List[Tuple[float, int]], device: str="cpu"):
+    def __init__(self, signature: List[Tuple[float, int]], device: str = "cpu"):
         # Device management
         self.device = device
 
@@ -232,8 +238,8 @@ class ProductManifold(Manifold):
         return self
 
     def initialize_embeddings(
-            self, n_points: int, scales: Union[List[float], float] = 1.0
-        ) -> TT["n_points", "n_ambient_dim"]:
+        self, n_points: int, scales: Union[List[float], float] = 1.0
+    ) -> TT["n_points", "n_ambient_dim"]:
         """Randomly initialize n_points embeddings on the product manifold."""
         # Scales management
         if not isinstance(scales, list):
@@ -273,8 +279,8 @@ class ProductManifold(Manifold):
         return [X[..., self.man2dim[i]] for i in range(len(self.P))]
 
     def sample(
-        self, 
-        z_mean: Optional[TT["n_points", "n_dim"]] = None, 
+        self,
+        z_mean: Optional[TT["n_points", "n_dim"]] = None,
         # sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None
         sigma_factorized: Optional[List[TT["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
     ) -> TT["n_points", "n_ambient_dim"]:
@@ -288,7 +294,7 @@ class ProductManifold(Manifold):
             sigma_factorized = [torch.stack([torch.eye(M.dim)] * n) for M in self.P]
         else:
             sigma_factorized = [
-                torch.Tensor(sigma).reshape(-1, M.dim, M.dim).to(self.device) 
+                torch.Tensor(sigma).reshape(-1, M.dim, M.dim).to(self.device)
                 for M, sigma in zip(self.P, sigma_factorized)
             ]
 
@@ -316,7 +322,7 @@ class ProductManifold(Manifold):
         if sigma_factorized is None:
             sigma_factorized = [torch.stack([torch.eye(M.dim)] * n) for M in self.P]
             # Note that this factorization assumes block-diagonal covariance matrices
-        
+
         mu_factorized = self.factorize(mu)
         z_factorized = self.factorize(z)
         component_lls = [

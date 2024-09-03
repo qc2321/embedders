@@ -9,19 +9,24 @@ from .midpoint import midpoint
 from torchtyping import TensorType as TT
 from typing import Tuple, Optional, Literal
 
+
 def _angular_greater(queries: TT["query_batch"], keys: TT["key_batch"]) -> TT["query_batch key_batch"]:
     """
     Given an angle theta, check whether a tensor of inputs is in [theta, theta + pi)
-    
+
     Args:
         queries: (query_batch,) tensor of angles used to define a decision hyperplane
         keys: (key_batch,) tensor of angles to be compared to queries
 
     Outputs:
-        comparisons: (query_batch, key_batch) tensor of Booleans checking whether each key is in range 
+        comparisons: (query_batch, key_batch) tensor of Booleans checking whether each key is in range
         [query, query + pi)
     """
-    return ((keys[None, :] - queries[:, None] + torch.pi) % (2 * torch.pi)) >= torch.pi
+    # return ((keys[None, :] - queries[:, None] + torch.pi) % (2 * torch.pi)) >= torch.pi
+
+    # Optimized version
+    diff = keys.unsqueeze(0) - queries.unsqueeze(1)
+    return (diff + torch.pi) % (2 * torch.pi) >= torch.pi
 
 
 def _get_info_gains(
@@ -66,6 +71,7 @@ def _get_info_gains(
 
     return ig
 
+
 def _get_split(
     angles: TT["query_batch dims"],
     comparisons: TT["query_batch dims key_batch"],
@@ -73,12 +79,8 @@ def _get_split(
     n: int,
     d: int,
 ) -> Tuple[
-    Tuple[
-        TT["query_batch_neg dims"], TT["query_batch_neg dims key_batch"], TT["query_batch_neg n_classes"]
-    ], 
-    Tuple[
-        TT["query_batch_pos dims"], TT["query_batch_pos dims key_batch"], TT["query_batch_pos n_classes"]
-    ]
+    Tuple[TT["query_batch_neg dims"], TT["query_batch_neg dims key_batch"], TT["query_batch_neg n_classes"]],
+    Tuple[TT["query_batch_pos dims"], TT["query_batch_pos dims key_batch"], TT["query_batch_pos n_classes"]],
 ]:
     """
     Split comparisons and labels into negative and positive classes
@@ -141,8 +143,8 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.min_samples_split = min_samples_split
 
         # These will become important later
-        self.nodes = [] # For fitted nodes
-        self.permutations = None # If used as part of a random forest
+        self.nodes = []  # For fitted nodes
+        self.permutations = None  # If used as part of a random forest
 
     def _preprocess(
         self,
@@ -209,7 +211,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self,
         ig: TT["query_batch dims"],
         angles: TT["query_batch intrinsic_dim"],
-        comparisons: TT["query_batch dims key_batch"]
+        comparisons: TT["query_batch dims key_batch"],
     ) -> Tuple[int, int, float]:
         """
         All of the postprocessing for an information gain check
@@ -235,7 +237,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         # We have the angle, but ideally we would like the *midpoint* angle.
         # So we need to grab the closest angle from the negative class:
         if (comparisons[n, d] == 1.0).all():
-            theta_neg = theta_pos 
+            theta_neg = theta_pos
             # TODO: replace this with something better, e.g. make "circular_greater" strict and make the pos_class the
             # smallest theta where this is 1.
         else:
@@ -254,16 +256,15 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         return n, d, m
 
-
     @torch.no_grad()
     def fit(self, X: TT["batch ambient_dim"], y: TT["batch"]) -> None:
         """
         Reworked fit function for new version of ProductDT
-        
+
         Args:
             X: (batch, ambient_dim) tensor of trainind data (ambient coordinate representation)
             y: (batch,) tensor of labels (integer representation)
-        
+
         Returns:
             None (fits tree in place)
         """
@@ -280,17 +281,17 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         )
 
     def _fit_node(
-            self, 
-            angles: TT["batch intrinsic_dim"], 
-            labels: TT["batch n_classes"], 
-            comparisons: TT["query_batch dim key_batch"], 
-            depth: int
-        ) -> DecisionNode:
+        self,
+        angles: TT["batch intrinsic_dim"],
+        labels: TT["batch n_classes"],
+        comparisons: TT["query_batch dim key_batch"],
+        depth: int,
+    ) -> DecisionNode:
         """
         The recursive component of the product space decision tree fitting function
-        
+
         Args:
-        
+
         """
         # Check halting conditions
         if depth == 0 or len(comparisons) < self.min_samples_split:
@@ -308,12 +309,8 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # Do left and right recursion after appending node to self.nodes
         # This ensures that the order of self.nodes is correct
-        node.left = self._fit_node(
-            angles=angles_neg, labels=labels_neg, comparisons=comparisons_neg, depth=depth - 1
-        )
-        node.right = self._fit_node(
-            angles=angles_pos, labels=labels_pos, comparisons=comparisons_pos, depth=depth - 1
-        )
+        node.left = self._fit_node(angles=angles_neg, labels=labels_neg, comparisons=comparisons_neg, depth=depth - 1)
+        node.right = self._fit_node(angles=angles_pos, labels=labels_pos, comparisons=comparisons_pos, depth=depth - 1)
         return node
 
     def _leaf_values(self, y: TT["batch"]) -> Tuple[TT["batch", "n_classes"], TT["batch"]]:
@@ -322,7 +319,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         return probs, probs.argmax()
 
     def _left(self, angles_row: TT["intrinsic_dim"], node: DecisionNode) -> bool:
-        """Boolean: Go left? Works on a preprocessed input vector. """
+        """Boolean: Go left? Works on a preprocessed input vector."""
         return _angular_greater(torch.tensor(node.theta).flatten(), angles_row[node.feature].flatten()).item()
 
     def _traverse(self, x: TT["intrinsic_dim"], node: DecisionNode) -> DecisionNode:
@@ -354,14 +351,14 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self,
         pm,
         max_depth=3,
-        min_samples_leaf=1, 
+        min_samples_leaf=1,
         min_samples_split=2,
         n_estimators=100,
         max_features="sqrt",
         max_samples=1.0,
         random_state=None,
         n_jobs=-1,
-        **kwargs
+        **kwargs,
     ):
         # Store hyperparameters
         self.pm = pm
@@ -381,14 +378,14 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         if isinstance(self.max_features, int) and self.max_features <= n_cols:
             n_cols_sample = n_cols
         elif self.max_features == "sqrt":
-            n_cols_sample = torch.ceil(torch.tensor(n_cols ** 0.5)).int()
+            n_cols_sample = torch.ceil(torch.tensor(n_cols**0.5)).int()
         elif self.max_features == "log2":
             n_cols_sample = torch.ceil(torch.log2(torch.tensor(d))).int()
         elif self.max_features == "none":
             n_cols_sample = n_cols
         else:
             raise ValueError(f"Unknown max_features parameter: {self.max_features}")
-    
+
         # Subsample - returns indices
         idx_sample = torch.randint(0, n_rows, (n_trees, n_rows))
         idx_dim = torch.stack([torch.randperm(n_cols)[:n_cols_sample] for _ in range(n_trees)])
@@ -410,10 +407,10 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
             tree.permutations = idx_dim
             tree.classes_ = classes
             tree.tree = tree._fit_node(
-                angles = angles[idx_sample][:, idx_dim],
+                angles=angles[idx_sample][:, idx_dim],
                 labels=labels[idx_sample],
                 comparisons=comparisons[idx_sample][:, idx_dim][:, :, idx_sample],
-                depth=self.max_depth
+                depth=self.max_depth,
             )
         return self
 
