@@ -32,6 +32,8 @@ def _angular_greater(queries: TT["query_batch"], keys: TT["key_batch"]) -> TT["q
 def _get_info_gains(
     comparisons: TT["query_batch dims key_batch"],
     labels: TT["query_batch n_classes"],
+    criterion: Literal["gini", "mse"] = "gini",
+    min_values_leaf: int = 1,
     eps: float = 1e-10,
 ) -> TT["query_batch dims"]:
     """
@@ -46,28 +48,56 @@ def _get_info_gains(
         ig: (query_batch, dims) tensor of information gains
     """
     # Matrix-multiply to get counts of labels in left and right splits
-    pos_labels = (comparisons @ labels).float()
-    neg_labels = ((1 - comparisons) @ labels).float()
+    if criterion == "gini":
+        pos_labels = (comparisons @ labels).float()
+        neg_labels = ((1 - comparisons) @ labels).float()
 
-    # Total counts are sums of label counts
-    n_pos = pos_labels.sum(dim=-1) + eps
-    n_neg = neg_labels.sum(dim=-1) + eps
-    n_total = n_pos + n_neg
+        # Total counts are sums of label counts
+        n_pos = pos_labels.sum(dim=-1) + eps
+        n_neg = neg_labels.sum(dim=-1) + eps
+        n_total = n_pos + n_neg
 
-    # Probabilities are label counts divided by total counts
-    pos_probs = pos_labels / n_pos.unsqueeze(-1)
-    neg_probs = neg_labels / n_neg.unsqueeze(-1)
-    total_probs = (pos_labels + neg_labels) / n_total.unsqueeze(-1)
+        # Probabilities are label counts divided by total counts, when Gini is used
+        pos_probs = pos_labels / n_pos.unsqueeze(-1)
+        neg_probs = neg_labels / n_neg.unsqueeze(-1)
+        total_probs = (pos_labels + neg_labels) / n_total.unsqueeze(-1)
 
-    # Gini impurity is 1 - sum(prob^2)
-    gini_pos = 1 - (pos_probs**2).sum(dim=-1)
-    gini_neg = 1 - (neg_probs**2).sum(dim=-1)
-    gini_total = 1 - (total_probs**2).sum(dim=-1)
+        # Gini impurity is 1 - sum(prob^2)
+        gini_pos = 1 - (pos_probs**2).sum(dim=-1)
+        gini_neg = 1 - (neg_probs**2).sum(dim=-1)
+        gini_total = 1 - (total_probs**2).sum(dim=-1)
+    
+    # For MSE, use the mean of the regression labels to compute MSE (i.e. look at variance)
+    elif criterion == "mse":
+        pos_sums = (comparisons @ labels).float()
+        neg_sums = ((1 - comparisons) @ labels).float()
+
+        # Total counts are sums of comparisons
+        n_pos = comparisons.sum(dim=-1) + eps
+        n_neg = (1 - comparisons).sum(dim=-1) + eps
+        n_total = n_pos + n_neg
+
+        # Means should be computed in a slightly odd way, since we want to use n_pos and n_neg
+        pos_means = pos_sums / n_pos
+        neg_means = neg_sums / n_neg
+        all_means = labels.mean() # Should be a scalar
+
+        # Compute MSE using the comparisons and the means
+        pos_mse = (comparisons @ (labels[:, None] - pos_means) ** 2).sum(dim=-1) / n_pos
+        neg_mse = ((1 - comparisons) @ (labels[:, None] - neg_means) ** 2).sum(dim=-1) / n_neg
+        total_mse = (labels - all_means) ** 2
+
+        # # Just reuse these variable names for now
+        gini_pos, gini_neg, gini_total = pos_mse, neg_mse, total_mse[:, None]
 
     # Information gain is the total gini impurity minus the weighted average of the new gini impurities
     ig = gini_total - (gini_pos * n_pos + gini_neg * n_neg) / n_total
 
     assert not ig.isnan().any()  # Ensure no NaNs
+
+    # Set information gain to zero if the split is invalid
+    invalid_mask = torch.logical_or(n_pos < min_values_leaf, n_neg < min_values_leaf)
+    ig[invalid_mask] = 0.0
 
     return ig
 
@@ -135,12 +165,19 @@ class DecisionNode:
 
 
 class ProductSpaceDT(BaseEstimator, ClassifierMixin):
-    def __init__(self, pm, max_depth=3, min_samples_leaf=1, min_samples_split=2, **kwargs):
+    def __init__(
+            self, pm, max_depth=3, min_samples_leaf=1, min_samples_split=2, min_impurity_decrease=0.0, task=Literal["classification", "regression"], **kwargs
+        ):
         # Store hyperparameters
         self.pm = pm
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
+        self.min_impurity_decrease = min_impurity_decrease
+
+        # Task-specific stuff
+        self.task = task
+        self.criterion = "gini" if task == "classification" else "mse"
 
         # These will become important later
         self.nodes = []  # For fitted nodes
@@ -197,15 +234,18 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         comparisons_reshaped = comparisons.permute(1, 2, 0)
 
         # One-hot encode labels
-        if y is not None:
+        if y is not None and self.task == "classification":
             classes, y_relabeled = y.unique(return_inverse=True)
             n_classes = len(classes)
-            labels_onehot = torch.nn.functional.one_hot(y_relabeled, num_classes=n_classes)
+            labels = torch.nn.functional.one_hot(y_relabeled, num_classes=n_classes)
+        elif y is not None and self.task == "regression":
+            classes = torch.tensor([])
+            labels = y
         else:
             classes = torch.tensor([])
-            labels_onehot = torch.tensor([])
+            labels = torch.tensor([])
 
-        return angles, labels_onehot.float(), classes, comparisons_reshaped.float()
+        return angles, labels.float(), classes, comparisons_reshaped.float()
 
     def _get_best_split(
         self,
@@ -270,14 +310,14 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         """
 
         # Preprocess data
-        angles, labels_onehot, classes, comparisons_reshaped = self._preprocess(X=X, y=y)
+        angles, labels, classes, comparisons_reshaped = self._preprocess(X=X, y=y)
 
         # Store classes for predictions
         self.classes_ = classes
 
         # Fit node
         self.tree = self._fit_node(
-            angles=angles, labels=labels_onehot, comparisons=comparisons_reshaped, depth=self.max_depth
+            angles=angles, labels=labels, comparisons=comparisons_reshaped, depth=self.max_depth
         )
 
     def _fit_node(
@@ -293,13 +333,24 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         Args:
 
         """
-        # Check halting conditions
-        if depth == 0 or len(comparisons) < self.min_samples_split:
+        def _halt(labels):
             probs, value = self._leaf_values(labels)
-            return DecisionNode(value=value.item(), probs=probs)
+            node = DecisionNode(value=value.item(), probs=probs)
+            self.nodes.append(node)
+            return node
+        
+        # Check halting conditions
+        if depth == 0 or comparisons.shape[0] < self.min_samples_split:
+            return _halt(labels)
 
         # The main loop is just the functions we've already defined
-        ig = _get_info_gains(comparisons=comparisons, labels=labels)
+        ig = _get_info_gains(comparisons=comparisons, labels=labels, criterion=self.criterion)
+
+        # Check if we have a valid split
+        if ig.max() <= self.min_impurity_decrease:
+            return _halt(labels)
+
+        # Get the best split
         n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons)
         (angles_neg, comparisons_neg, labels_neg), (angles_pos, comparisons_pos, labels_pos) = _get_split(
             angles=angles, comparisons=comparisons, labels=labels, n=n, d=d
@@ -307,16 +358,18 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         node = DecisionNode(feature=d.item(), theta=theta.item())
         self.nodes.append(node)
 
-        # Do left and right recursion after appending node to self.nodes
-        # This ensures that the order of self.nodes is correct
+        # Do left and right recursion after appending node to self.nodes (ensures order of self.nodes is correct)
         node.left = self._fit_node(angles=angles_neg, labels=labels_neg, comparisons=comparisons_neg, depth=depth - 1)
         node.right = self._fit_node(angles=angles_pos, labels=labels_pos, comparisons=comparisons_pos, depth=depth - 1)
         return node
 
     def _leaf_values(self, y: TT["batch"]) -> Tuple[TT["batch", "n_classes"], TT["batch"]]:
         """Get majority class and class probabilities"""
-        probs = y.sum(dim=0) / y.sum()
-        return probs, probs.argmax()
+        if self.task == "regression":
+            return y.mean(), y.mean()
+        else:
+            probs = y.sum(dim=0) / y.sum()
+            return probs, probs.argmax()
 
     def _left(self, angles_row: TT["intrinsic_dim"], node: DecisionNode) -> bool:
         """Boolean: Go left? Works on a preprocessed input vector."""
@@ -339,39 +392,51 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
     def predict(self, X: TT["batch intrinsic_dim"]) -> TT["batch"]:
         """Predict class labels for samples in X"""
-        return self.classes_[self.predict_proba(X).argmax(dim=1)]
+        if self.task == "classification":
+            return self.classes_[self.predict_proba(X).argmax(dim=1)]
+        else:
+            return self.predict_proba(X) # Simplified version
 
     def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""
-        return self.predict(X) == y
+        if self.task == "classification":
+            return self.predict(X) == y
+        else:
+            return ((self.predict(X) == y) ** 2).float().mean()
 
 
 class ProductSpaceRF(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         pm,
+        task,
         max_depth=3,
         min_samples_leaf=1,
         min_samples_split=2,
+        min_impurity_decrease=0.0,
         n_estimators=100,
         max_features="sqrt",
         max_samples=1.0,
         random_state=None,
         n_jobs=-1,
-        **kwargs,
     ):
-        # Store hyperparameters
-        self.pm = pm
-        self.max_depth = max_depth
-        self.min_samples_leaf = min_samples_leaf
-        self.min_samples_split = min_samples_split
+        # Tree hyperparameters
+        tree_kwargs = {}
+        self.pm = tree_kwargs["pm"] = pm
+        self.task = tree_kwargs["task"] = task
+        self.max_depth = tree_kwargs["max_depth"] = max_depth
+        self.min_samples_leaf = tree_kwargs["min_samples_leaf"] = min_samples_leaf
+        self.min_samples_split = tree_kwargs["min_samples_split"] = min_samples_split
+        self.min_impurity_decrease = tree_kwargs["min_impurity_decrease"] = min_impurity_decrease
+
+        # Random forest hyperparameters
         self.n_estimators = n_estimators
         self.max_features = max_features
         self.max_samples = max_samples
         self.random_state = random_state
         self.max_depth = max_depth
         self.n_jobs = n_jobs
-        self.trees = [ProductSpaceDT(pm=pm, **kwargs) for _ in range(n_estimators)]
+        self.trees = [ProductSpaceDT(**tree_kwargs) for _ in range(n_estimators)]
 
     def _generate_subsample(self, n_rows, n_cols, n_trees):
         # Get number of dimensions in our subsample
@@ -420,8 +485,16 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
 
     def predict(self, X: TT["batch intrinsic_dim"]) -> TT["batch"]:
         """Predict class labels for samples in X"""
-        return self.classes_[self.predict_proba(X).argmax(dim=1)]
+        # return self.classes_[self.predict_proba(X).argmax(dim=1)]
+        if self.task == "classification":
+            return self.classes_[self.predict_proba(X).argmax(dim=1)]
+        else:
+            return self.predict_proba(X) # Simplified version
 
     def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""
-        return self.predict(X) == y
+        # return self.predict(X) == y
+        if self.task == "classification":
+            return self.predict(X) == y
+        else:
+            return ((self.predict(X) == y) ** 2).float().mean()

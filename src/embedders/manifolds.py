@@ -90,7 +90,8 @@ class Manifold:
         self,
         z_mean: Optional[TT["n_points", "n_ambient_dim"]] = None,
         sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None,
-    ) -> TT["n_points", "n_ambient_dim"]:
+        return_tangent: bool = False
+    ) -> Union[TT["n_points", "n_ambient_dim"], Tuple[TT["n_points", "n_ambient_dim"], TT["n_points", "n_dim"]]]:
         """Sample from the variational distribution."""
         if z_mean is None:
             z_mean = self.mu0
@@ -111,17 +112,23 @@ class Manifold:
         # Don't need to adjust normal vectors for the Scaled manifold class in geoopt - very cool!
 
         # Enter tangent plane
-        v = self._to_tangent_plane_mu0(v)
+        v_tangent = self._to_tangent_plane_mu0(v)
 
         # Move to z_mean via parallel transport
-        z = self.manifold.transp(x=self.mu0, y=z_mean, v=v)
+        z = self.manifold.transp(x=self.mu0, y=z_mean, v=v_tangent)
 
         # If we're sampling at the origin, z and v should be the same
         mask = torch.all(z == self.mu0, dim=1)
-        assert torch.allclose(v[mask], z[mask])
+        assert torch.allclose(v_tangent[mask], z[mask])
 
         # Exp map onto the manifold
-        return self.manifold.expmap(x=z_mean, u=z)
+        x = self.manifold.expmap(x=z_mean, u=z)
+
+        # Different return types
+        if return_tangent:
+            return x, v
+        else:
+            return x
 
     def log_likelihood(
         self,
@@ -268,8 +275,6 @@ class ProductManifold(Manifold):
             else:
                 raise ValueError("Unknown manifold type")
 
-        for x in x_embed:
-            print(x.device)
         x_embed = torch.cat(x_embed, axis=1).to(self.device)
         # x_embed = geoopt.ManifoldParameter(x_embed, manifold=self.manifold)
         return x_embed
@@ -283,7 +288,8 @@ class ProductManifold(Manifold):
         z_mean: Optional[TT["n_points", "n_dim"]] = None,
         # sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None
         sigma_factorized: Optional[List[TT["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
-    ) -> TT["n_points", "n_ambient_dim"]:
+        return_tangent: bool = False
+    ) -> Union[TT["n_points", "n_ambient_dim"], Tuple[TT["n_points", "n_ambient_dim"], TT["n_points", "n_dim"]]]:
         """Sample from the variational distribution."""
         if z_mean is None:
             z_mean = self.mu0
@@ -302,10 +308,22 @@ class ProductManifold(Manifold):
         assert z_mean.shape[-1] == self.ambient_dim
 
         # Sample initial vector from N(0, sigma)
-        return torch.cat(
-            [M.sample(z_M, sigma_M) for M, z_M, sigma_M in zip(self.P, self.factorize(z_mean), sigma_factorized)],
-            dim=1,
-        )
+        # x = torch.cat(
+        #     [M.sample(z_M, sigma_M) for M, z_M, sigma_M in zip(self.P, self.factorize(z_mean), sigma_factorized)],
+        #     dim=1,
+        # )
+        samples = [
+            M.sample(z_M, sigma_M, return_tangent=True) 
+            for M, z_M, sigma_M in zip(self.P, self.factorize(z_mean), sigma_factorized)
+        ]
+
+        x = torch.cat([s[0] for s in samples], dim=1)
+        v = torch.cat([s[1] for s in samples], dim=1)
+
+        if return_tangent:
+            return x, v
+        else:
+            return x
 
     def log_likelihood(
         self,
