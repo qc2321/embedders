@@ -66,7 +66,7 @@ def _get_info_gains(
         gini_pos = 1 - (pos_probs**2).sum(dim=-1)
         gini_neg = 1 - (neg_probs**2).sum(dim=-1)
         gini_total = 1 - (total_probs**2).sum(dim=-1)
-    
+
     # For MSE, use the mean of the regression labels to compute MSE (i.e. look at variance)
     elif criterion == "mse":
         pos_sums = (comparisons @ labels).float()
@@ -80,15 +80,17 @@ def _get_info_gains(
         # Means should be computed in a slightly odd way, since we want to use n_pos and n_neg
         pos_means = pos_sums / n_pos
         neg_means = neg_sums / n_neg
-        all_means = labels.mean() # Should be a scalar
+        all_means = labels.mean()  # Should be a scalar
 
         # Compute MSE using the comparisons and the means
-        pos_mse = (comparisons @ (labels[:, None] - pos_means) ** 2).sum(dim=-1) / n_pos
-        neg_mse = ((1 - comparisons) @ (labels[:, None] - neg_means) ** 2).sum(dim=-1) / n_neg
-        total_mse = (labels - all_means) ** 2
+        pos_se = ((labels[:, None, None] - pos_means) ** 2).permute(1, 2, 0)
+        neg_se = ((labels[:, None, None] - neg_means) ** 2).permute(1, 2, 0)
+        pos_mse = (comparisons * pos_se).sum(dim=-1) / n_pos
+        neg_mse = ((1 - comparisons) * neg_se).sum(dim=-1) / n_neg
+        total_mse = ((labels - all_means) ** 2).mean()
 
-        # # Just reuse these variable names for now
-        gini_pos, gini_neg, gini_total = pos_mse, neg_mse, total_mse[:, None]
+        # Just reuse these variable names for now
+        gini_pos, gini_neg, gini_total = pos_mse, neg_mse, total_mse
 
     # Information gain is the total gini impurity minus the weighted average of the new gini impurities
     ig = gini_total - (gini_pos * n_pos + gini_neg * n_neg) / n_total
@@ -166,8 +168,15 @@ class DecisionNode:
 
 class ProductSpaceDT(BaseEstimator, ClassifierMixin):
     def __init__(
-            self, pm, max_depth=3, min_samples_leaf=1, min_samples_split=2, min_impurity_decrease=0.0, task=Literal["classification", "regression"], **kwargs
-        ):
+        self,
+        pm,
+        max_depth=3,
+        min_samples_leaf=1,
+        min_samples_split=2,
+        min_impurity_decrease=0.0,
+        task=Literal["classification", "regression"],
+        **kwargs,
+    ):
         # Store hyperparameters
         self.pm = pm
         self.max_depth = max_depth
@@ -212,6 +221,10 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         if y is not None:
             assert y.dim() == 1
             assert X.shape[0] == y.shape[0]
+
+            # If y is floats, warn about regression
+            if self.task == "classification" and not torch.allclose(y, y.round()):
+                print("Warning: y contains non-integer values. Try regression instead.")
 
         # Process X-values into angles based on the signature
         angles = torch.zeros((X.shape[0], self.pm.dim), device=X.device)
@@ -316,9 +329,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.classes_ = classes
 
         # Fit node
-        self.tree = self._fit_node(
-            angles=angles, labels=labels, comparisons=comparisons_reshaped, depth=self.max_depth
-        )
+        self.tree = self._fit_node(angles=angles, labels=labels, comparisons=comparisons_reshaped, depth=self.max_depth)
 
     def _fit_node(
         self,
@@ -333,12 +344,13 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         Args:
 
         """
+
         def _halt(labels):
             probs, value = self._leaf_values(labels)
             node = DecisionNode(value=value.item(), probs=probs)
             self.nodes.append(node)
             return node
-        
+
         # Check halting conditions
         if depth == 0 or comparisons.shape[0] < self.min_samples_split:
             return _halt(labels)
@@ -395,14 +407,14 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         if self.task == "classification":
             return self.classes_[self.predict_proba(X).argmax(dim=1)]
         else:
-            return self.predict_proba(X) # Simplified version
+            return self.predict_proba(X)  # Simplified version
 
     def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""
         if self.task == "classification":
             return self.predict(X) == y
         else:
-            return ((self.predict(X) == y) ** 2).float().mean()
+            return ((self.predict(X) - y) ** 2).float().mean()
 
 
 class ProductSpaceRF(BaseEstimator, ClassifierMixin):
@@ -489,7 +501,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         if self.task == "classification":
             return self.classes_[self.predict_proba(X).argmax(dim=1)]
         else:
-            return self.predict_proba(X) # Simplified version
+            return self.predict_proba(X)  # Simplified version
 
     def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""

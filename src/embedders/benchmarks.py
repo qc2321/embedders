@@ -4,16 +4,21 @@ from typing import List, Literal, Dict
 import torch
 import numpy as np
 
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, root_mean_squared_error
 from sklearn.model_selection import train_test_split
 
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
-from sklearn.linear_model import Perceptron
+from sklearn.linear_model import SGDClassifier, SGDRegressor
 from sklearn.svm import SVC, SVR
 
+# Tabbaghi imports
+from hyperdt.product_space_svm import mix_curv_svm
+from hyperdt.product_space_perceptron import mix_curv_perceptron
+
 from .tree_new import ProductSpaceDT, ProductSpaceRF
+from .perceptron import ProductSpacePerceptron
 from .manifolds import ProductManifold
 
 
@@ -50,7 +55,7 @@ def benchmark(
     split: Literal["train_test", "cross_val"] = "train_test",
     device: Literal["cpu", "cuda", "mps"] = "cpu",
     score: Literal["accuracy", "f1-micro", "mse", "percent_rmse"] = "f1-micro",
-    classifiers: List[str] = [
+    models: List[str] = [
         "sklearn_dt",
         "sklearn_rf",
         "product_dt",
@@ -66,7 +71,6 @@ def benchmark(
     min_samples_split: int = 2,
     min_samples_leaf: int = 1,
     task: Literal["classification", "regression"] = "classification",
-    **kwargs,
 ) -> Dict[str, float]:
     # Coerce to tensor as needed
     if not torch.is_tensor(X):
@@ -81,7 +85,7 @@ def benchmark(
     if task == "classification":
         assert score in ["accuracy", "f1-micro"]
     elif task == "regression":
-        assert score in ["mse", "percent_rmse"]
+        assert score in ["mse", "rmse", "percent_rmse"]
 
     # # Fix nan and inf values
     # X = torch.nan_to_num(X, nan=0, posinf=3e38, neginf=-3e38)
@@ -105,8 +109,11 @@ def benchmark(
 
     # TODO: Implement other splits
     # TODO: Implement other scoring metrics
-    def _score(_X, _y, model, torch=False):
-        y_pred = model.predict(_X)
+    def _score(_X, _y, model, y_pred_override=None, torch=False):
+        if y_pred_override is not None:
+            y_pred = y_pred_override
+        else:
+            y_pred = model.predict(_X)
         if torch:
             y_pred = y_pred.detach().cpu().numpy()
         if score == "accuracy":
@@ -114,15 +121,18 @@ def benchmark(
         elif score == "f1-micro":
             return f1_score(_y, y_pred, average="micro")
         elif score == "mse":
-            return ((y_pred - _y) ** 2).mean()
+            # return ((y_pred - _y) ** 2).mean()
+            return mean_squared_error(_y, y_pred)
+        elif score == "rmse":
+            return root_mean_squared_error(_y, y_pred)
         elif score == "percent_rmse":
-            return (np.sqrt((y_pred - _y) ** 2) / np.abs(_y)).mean()
+            return (root_mean_squared_error(_y, y_pred, multioutput="raw_values") / np.abs(_y)).mean()
         else:
             raise ValueError(f"Unknown score: {score}")
 
     # Aggregate arguments
     tree_kwargs = {"max_depth": max_depth, "min_samples_leaf": min_samples_leaf, "min_samples_split": min_samples_split}
-    rf_kwargs = {"n_estimators": n_estimators} 
+    rf_kwargs = {"n_estimators": n_estimators}
 
     # Define your models
     if task == "classification":
@@ -130,55 +140,57 @@ def benchmark(
         rf_class = RandomForestClassifier
         knn_class = KNeighborsClassifier
         svm_class = SVC
+        perceptron_class = SGDClassifier
     elif task == "regression":
         dt_class = DecisionTreeRegressor
         rf_class = RandomForestRegressor
         knn_class = KNeighborsRegressor
         svm_class = SVR
+        perceptron_class = SGDRegressor
 
     # Evaluate sklearn
     accs = {}
-    if "sklearn_dt" in classifiers:
+    if "sklearn_dt" in models:
         dt = dt_class(**tree_kwargs)
         dt.fit(X_train_np, y_train_np)
         accs["sklearn_dt"] = _score(X_test_np, y_test_np, dt, torch=False)
 
-    if "sklearn_rf" in classifiers:
+    if "sklearn_rf" in models:
         rf = rf_class(**tree_kwargs, **rf_kwargs)
         rf.fit(X_train_np, y_train_np)
         accs["sklearn_rf"] = _score(X_test_np, y_test_np, rf, torch=False)
 
-    if "product_dt" in classifiers:
+    if "product_dt" in models:
         psdt = ProductSpaceDT(pm=pm, task=task, **tree_kwargs)
         psdt.fit(X_train, y_train)
         accs["product_dt"] = _score(X_test, y_test_np, psdt, torch=True)
 
-    if "product_rf" in classifiers:
+    if "product_rf" in models:
         psrf = ProductSpaceRF(pm=pm, task=task, **tree_kwargs, **rf_kwargs)
         psrf.fit(X_train, y_train)
         accs["product_rf"] = _score(X_test, y_test_np, psrf, torch=True)
 
-    if "tangent_dt" in classifiers:
+    if "tangent_dt" in models:
         tdt = dt_class(**tree_kwargs)
         tdt.fit(X_train_tangent_np, y_train_np)
         accs["tangent_dt"] = _score(X_test_tangent_np, y_test_np, tdt, torch=False)
 
-    if "tangent_rf" in classifiers:
+    if "tangent_rf" in models:
         trf = rf_class(**tree_kwargs, **rf_kwargs)
         trf.fit(X_train_tangent_np, y_train_np)
         accs["tangent_rf"] = _score(X_test_tangent_np, y_test_np, trf, torch=False)
 
-    if "restricted_dt" in classifiers:
+    if "restricted_dt" in models:
         dt = dt_class(**tree_kwargs)
         dt.fit(X_train_restricted, y_train_np)
         accs["restricted_dt"] = _score(X_test_restricted, y_test_np, dt, torch=False)
 
-    if "restricted_rf" in classifiers:
+    if "restricted_rf" in models:
         rf = rf_class(**tree_kwargs, **rf_kwargs)
         rf.fit(X_train_restricted, y_train_np)
         accs["restricted_rf"] = _score(X_test_restricted, y_test_np, rf, torch=False)
 
-    if "knn" in classifiers:
+    if "knn" in models:
         # Get dists - max imputation is a workaround for some nan values we occasionally get
         train_dists = pm.pdist(X_train)
         train_dists = torch.nan_to_num(train_dists, nan=train_dists[~train_dists.isnan()].max().item())
@@ -195,17 +207,40 @@ def benchmark(
         knn = knn_class(metric="precomputed")
         knn.fit(train_dists, y_train_np)
         accs["knn"] = _score(train_test_dists, y_test_np, knn, torch=False)
-    
-    if "perceptron" in classifiers:
-        # Perceptron doesn't work with regression
-        if task == "regression":
-            accs["perceptron"] = None
-        else:
-            ptron = Perceptron(fit_intercept=False) # Must be false for our data
-            ptron.fit(X_train_np, y_train_np)
-            accs["perceptron"] = _score(X_test_np, y_test_np, ptron, torch=False)
-    
-    if "svm" in classifiers:
+
+    if "perceptron" in models:
+        loss = "perceptron" if task == "classification" else "squared_error"
+        ptron = perceptron_class(
+            loss=loss, learning_rate="constant", fit_intercept=False, eta0=1.0, max_iter=10_000
+        )  # fit_intercept must be false for ambient coordinates
+        ptron.fit(X_train_np, y_train_np)
+        accs["perceptron"] = _score(X_test_np, y_test_np, ptron, torch=False)
+
+    # if "ps_perceptron" in models:
+    #     if task == "regression":
+    #         accs["ps_perceptron"] = None
+    #     else:
+    #         sig = ",".join([f"{M.type.lower()}{M.dim}" for M in pm.P])
+    #         embed_data = {
+    #             "X_train": X_train_np,
+    #             "X_test": X_test_np,
+    #             "y_train": y_train_np,
+    #             "y_test": y_test_np,
+    #             "max_norm": [M.manifold.inner(x, x).max().item() for M, x in zip(pm.P, pm.factorize(X))],
+    #             "curv_value": [abs(M.curvature) for M in pm.P],
+    #         }
+    #         ps_perceptron = mix_curv_perceptron(
+    #             mix_component=sig, embed_data=embed_data, multiclass=True, max_round=10, max_update=1_000
+    #         )
+    #         y_pred = ps_perceptron.process_data()
+    #         accs["ps_perceptron"] = _score(None, y_test_np, ps_perceptron, y_pred_override=y_pred, torch=False)
+
+    if "ps_perceptron" in models:
+        psrf = ProductSpacePerceptron(pm=pm)
+        psrf.fit(X_train, y_train)
+        accs["ps_perceptron"] = _score(X_test, y_test_np, psrf, torch=True)
+
+    if "svm" in models:
         # Get inner products for precomputed kernel matrix
         train_ips = pm.manifold.component_inner(X_train[:, None], X_train[None, :]).sum(dim=-1)
         train_test_ips = pm.manifold.component_inner(X_test[:, None], X_train[None, :]).sum(dim=-1)
@@ -219,11 +254,28 @@ def benchmark(
         # Need max_iter because it can hang. It can be large, since this doesn't happen often.
         svm.fit(train_ips, y_train_np)
         accs["svm"] = _score(train_test_ips, y_test_np, svm, torch=False)
-    
-    if "distance_dt" in classifiers:
+
+    if "ps_svm" in models:
+        if task == "regression":
+            accs["ps_svm"] = None
+        else:
+            sig = ",".join([f"{M.type.lower()}{M.dim}" for M in pm.P])
+            embed_data = {
+                "X_train": X_train_np,
+                "X_test": X_test_np,
+                "y_train": y_train_np,
+                "y_test": y_test_np,
+                "max_norm": [M.manifold.inner(x, x).max().item() for M, x in zip(pm.P, pm.factorize(X))],
+                "curv_value": [abs(M.curvature) for M in pm.P],
+            }
+            ps_svm = mix_curv_svm(mix_component=sig, embed_data=embed_data)
+            y_pred = ps_svm.process_data()
+            accs["ps_svm"] = _score(None, y_test_np, ps_svm, y_pred_override=y_pred, torch=False)
+
+    if "distance_dt" in models:
         raise NotImplementedError("Distance decision tree not implemented yet")
-    
-    if "distance_rf" in classifiers:
+
+    if "distance_rf" in models:
         raise NotImplementedError("Distance random forest not implemented yet")
 
     return accs

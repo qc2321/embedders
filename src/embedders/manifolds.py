@@ -18,19 +18,22 @@ class Manifold:
         # A couple of manifold-specific quirks we need to deal with here
         if curvature < 0:
             self.type = "H"
-            self.manifold = geoopt.Scaled(geoopt.Lorentz(), self.scale, learnable=True).to(self.device)
+            man = geoopt.Lorentz(k=1.0)
+            # Use 'k=1.0' because the scale will take care of the curvature
         elif curvature == 0:
             self.type = "E"
-            self.manifold = geoopt.Scaled(geoopt.Euclidean(), self.scale, learnable=True).to(self.device)
+            man = geoopt.Euclidean(ndim=1)
+            # Use 'ndim=1' because dim means the *shape* of the Euclidean space, not the dimensionality...
         else:
             self.type = "S"
-            self.manifold = geoopt.Scaled(geoopt.Sphere(), self.scale, learnable=True).to(self.device)
+            man = geoopt.Sphere()
+        self.manifold = geoopt.Scaled(man, self.scale, learnable=True).to(self.device)
 
         self.ambient_dim = dim if curvature == 0 else dim + 1
         if curvature == 0:
-            self.mu0 = torch.zeros(self.dim).to(self.device)
+            self.mu0 = torch.zeros(self.dim).to(self.device).reshape(1, -1)
         else:
-            self.mu0 = torch.Tensor([1.0] + [0.0] * dim).to(self.device)
+            self.mu0 = torch.Tensor([1.0] + [0.0] * dim).to(self.device).reshape(1, -1)
         self.name = f"{self.type}_{abs(self.curvature):.1f}^{dim}"
 
         # Couple of assertions to check
@@ -44,24 +47,24 @@ class Manifold:
 
     def dist(self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]) -> TT["n_points1", "n_points2"]:
         """Inherit distance function from the geoopt manifold."""
-        if self.type == "E":
-            return self.manifold.dist(X[:, None], Y[None, :]).norm(dim=-1)
-        else:
-            return self.manifold.dist(X[:, None], Y[None, :])
+        # if self.type == "E":
+        #     return self.manifold.dist(X[:, None], Y[None, :]).norm(dim=-1)
+        # else:
+        return self.manifold.dist(X[:, None], Y[None, :])
 
     def dist2(self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]) -> TT["n_points1", "n_points2"]:
         """Inherit squared distance function from the geoopt manifold."""
-        if self.type == "E":
-            return self.manifold.dist2(X[:, None], Y[None, :]).sum(dim=-1)
-        else:
-            return self.manifold.dist2(X[:, None], Y[None, :])
+        # if self.type == "E":
+        #     return self.manifold.dist2(X[:, None], Y[None, :]).sum(dim=-1)
+        # else:
+        return self.manifold.dist2(X[:, None], Y[None, :])
 
     def pdist(self, X: TT["n_points", "n_dim"]) -> TT["n_points", "n_points"]:
         """Compute pairwise  distances between embeddings."""
-        if self.type == "E":
-            dists = self.dist(X, X).norm(dim=-1)
-        else:
-            dists = self.dist(X, X)
+        # if self.type == "E":
+        #     dists = self.dist(X, X).norm(dim=-1)
+        # else:
+        dists = self.dist(X, X)
 
         # Fill diagonal with zeros
         dists.fill_diagonal_(0.0)
@@ -70,10 +73,10 @@ class Manifold:
 
     def pdist2(self, X: TT["n_points", "n_dim"]) -> TT["n_points", "n_points"]:
         """Compute pairwise SQUARED distances between embeddings."""
-        if self.type == "E":
-            dists2 = self.dist2(X, X).sum(dim=-1)
-        else:
-            dists2 = self.dist2(X, X)
+        # if self.type == "E":
+        #     dists2 = self.dist2(X, X).sum(dim=-1)
+        # else:
+        dists2 = self.dist2(X, X)
 
         dists2.fill_diagonal_(0.0)
 
@@ -90,7 +93,7 @@ class Manifold:
         self,
         z_mean: Optional[TT["n_points", "n_ambient_dim"]] = None,
         sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None,
-        return_tangent: bool = False
+        return_tangent: bool = False,
     ) -> Union[TT["n_points", "n_ambient_dim"], Tuple[TT["n_points", "n_ambient_dim"], TT["n_points", "n_dim"]]]:
         """Sample from the variational distribution."""
         if z_mean is None:
@@ -288,7 +291,7 @@ class ProductManifold(Manifold):
         z_mean: Optional[TT["n_points", "n_dim"]] = None,
         # sigma: Optional[TT["n_points", "n_dim", "n_dim"]] = None
         sigma_factorized: Optional[List[TT["n_points", "n_dim_manifold", "n_dim_manifold"]]] = None,
-        return_tangent: bool = False
+        return_tangent: bool = False,
     ) -> Union[TT["n_points", "n_ambient_dim"], Tuple[TT["n_points", "n_ambient_dim"], TT["n_points", "n_dim"]]]:
         """Sample from the variational distribution."""
         if z_mean is None:
@@ -313,7 +316,7 @@ class ProductManifold(Manifold):
         #     dim=1,
         # )
         samples = [
-            M.sample(z_M, sigma_M, return_tangent=True) 
+            M.sample(z_M, sigma_M, return_tangent=True)
             for M, z_M, sigma_M in zip(self.P, self.factorize(z_mean), sigma_factorized)
         ]
 
