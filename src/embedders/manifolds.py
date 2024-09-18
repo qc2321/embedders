@@ -20,6 +20,8 @@ class Manifold:
             self.type = "H"
             man = geoopt.Lorentz(k=1.0)
             # Use 'k=1.0' because the scale will take care of the curvature
+            # For more information, see the bottom of page 5 of Gu et al. (2019):
+            # https://openreview.net/pdf?id=HJxeWnCcF7
         elif curvature == 0:
             self.type = "E"
             man = geoopt.Euclidean(ndim=1)
@@ -211,7 +213,7 @@ class ProductManifold(Manifold):
         self.name = " x ".join([M.name for M in self.P])
 
         # Origin
-        self.mu0 = torch.cat([M.mu0 for M in self.P], axis=0).to(self.device)
+        self.mu0 = torch.cat([M.mu0 for M in self.P], axis=1).to(self.device)
 
         # Manifold <-> Dimension mapping
         self.ambient_dim, self.n_manifolds, self.dim = 0, 0, 0

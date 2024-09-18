@@ -39,7 +39,7 @@ def gaussian_mixture(
     # Set seed
     if seed is not None:
         torch.manual_seed(seed)
-    
+
     # Deal with clusters
     if num_clusters is None:
         num_clusters = num_classes
@@ -85,7 +85,7 @@ def gaussian_mixture(
     if task == "classification":
         labels = cluster_to_class[cluster_assignments]
     elif task == "regression":
-        slopes = (0.5 - torch.randn(num_clusters, pm.dim)) * 20
+        slopes = (0.5 - torch.randn(num_clusters, pm.dim)) * 2
         intercepts = (0.5 - torch.randn(num_clusters)) * 20
         labels = torch.einsum("ij,ij->i", slopes[cluster_assignments], tangent_vals) + intercepts[cluster_assignments]
 
@@ -93,5 +93,8 @@ def gaussian_mixture(
         N = torch.distributions.Normal(0, regression_noise_std)
         v = N.sample((num_points,))
         labels += v
+
+        # Normalize regression labels to range [0, 1] so that RMSE can be more easily interpreted
+        labels = (labels - labels.min()) / (labels.max() - labels.min())
 
     return samples, labels

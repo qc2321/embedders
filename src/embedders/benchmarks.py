@@ -1,5 +1,5 @@
 from torchtyping import TensorType as TT
-from typing import List, Literal, Dict
+from typing import List, Literal, Dict, Optional
 
 import torch
 import numpy as np
@@ -63,14 +63,15 @@ def benchmark(
         "tangent_dt",
         "tangent_rf",
         "knn",
-        "perceptron",
-        "svm",
+        # "ps_perceptron",
+        # "svm",
     ],
     max_depth: int = 3,
     n_estimators: int = 12,
     min_samples_split: int = 2,
     min_samples_leaf: int = 1,
     task: Literal["classification", "regression"] = "classification",
+    seed: Optional[int] = None,
 ) -> Dict[str, float]:
     # Coerce to tensor as needed
     if not torch.is_tensor(X):
@@ -132,7 +133,7 @@ def benchmark(
 
     # Aggregate arguments
     tree_kwargs = {"max_depth": max_depth, "min_samples_leaf": min_samples_leaf, "min_samples_split": min_samples_split}
-    rf_kwargs = {"n_estimators": n_estimators}
+    rf_kwargs = {"n_estimators": n_estimators, "n_jobs": -1, "random_state": seed}
 
     # Define your models
     if task == "classification":

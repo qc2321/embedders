@@ -1,5 +1,5 @@
 import torch
-from torchtyping import TensorType
+from torchtyping import TensorType as TT
 import networkx as nx
 import pandas as pd
 import numpy as np
@@ -16,7 +16,7 @@ def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list)
     return nx.floyd_warshall_numpy(G.subgraph(top_cc)), list(top_cc)
 
 
-def load_cities(cities_path: str = "/home/phil/productDT/data/cities.txt") -> TensorType["n_points", "n_points"]:
+def load_cities(cities_path: str = "../../data/cities.txt") -> TT["n_points", "n_points"]:
     dists_flattened = []
     with open(cities_path) as f:
         for line in f:
@@ -29,7 +29,7 @@ def load_cities(cities_path: str = "/home/phil/productDT/data/cities.txt") -> Te
     return cities_dists
 
 
-def load_cs_phds(cs_phds_path="/home/phil/productDT/data/cs_phds.txt", labels: bool = False) -> torch.Tensor:
+def load_cs_phds(cs_phds_path="../../data/cs_phds.txt", labels: bool = False) -> torch.Tensor:
     G = nx.Graph()
 
     with open(cs_phds_path, "r") as f:
@@ -72,11 +72,10 @@ def load_power():
 
 
 def load_polblogs(
-    polblogs_path: str = "/teamspace/studios/this_studio/embedders/data/graphs/polblogs.mtx",
-    polblogs_labels_path: str = "/teamspace/studios/this_studio/embedders/data/graphs/polblogs_labels.tsv",
+    polblogs_path: str = "../../data/graphs/polblogs.mtx",
+    polblogs_labels_path: str = "../../data/graphs/polblogs_labels.tsv",
     labels=False,
-) -> TensorType["n_points", "n_points"]:
-
+) -> TT["n_points", "n_points"]:
     # Load the graph
     G = nx.from_scipy_sparse_array(mmread(polblogs_path))
     dists, idx = _top_cc_dists(G)
@@ -104,6 +103,7 @@ def _load_lymphoma():
 
 def _load_healthy_donors():
     """https://www.10xgenomics.com/resources/datasets/pbm-cs-from-a-healthy-donor-targeted-compare-immunology-panel-3-1-standard-4-0-0"""
+    raise NotImplementedError
 
 
 def load_lymphoma_and_healthy_donors():
@@ -112,7 +112,7 @@ def load_lymphoma_and_healthy_donors():
     raise NotImplementedError
 
 
-def load(name: str, **kwargs) -> TensorType["n_points", "n_points"]:
+def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
     if name == "cities":
         return load_cities(**kwargs)
     elif name == "cs_phds":

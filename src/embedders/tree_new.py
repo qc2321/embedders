@@ -4,6 +4,7 @@ import torch
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 from .midpoint import midpoint
+from .manifolds import ProductManifold
 
 # Typing stuff
 from torchtyping import TensorType as TT
@@ -157,7 +158,7 @@ def _get_split(
 
 # Copied over from hyperdt.torch.tree
 class DecisionNode:
-    def __init__(self, value=None, probs=None, feature=None, theta=None, left=None, right=None):
+    def __init__(self, value=None, probs=None, feature=None, theta=None):
         self.value = value
         self.probs = probs  # predicted class probabilities of all samples in the leaf
         self.feature = feature  # feature index
@@ -174,8 +175,8 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         min_samples_leaf=1,
         min_samples_split=2,
         min_impurity_decrease=0.0,
-        task=Literal["classification", "regression"],
-        **kwargs,
+        task: Literal["classification", "regression"] = "classification",
+        use_special_dims=False,
     ):
         # Store hyperparameters
         self.pm = pm
@@ -183,6 +184,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
         self.min_impurity_decrease = min_impurity_decrease
+        self.use_special_dims = use_special_dims
 
         # Task-specific stuff
         self.task = task
@@ -203,6 +205,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         Args:
             X: (batch, ambient_dim) tensor of coordinates
             y: (batch,) tensor of labels
+            include_special_dims: whether to include special dimensions as a new Euclidean component
 
         Outputs:
             X: (batch, intrinsic_dim) tensor of angles
@@ -322,6 +325,10 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             None (fits tree in place)
         """
 
+        # Pre-preprocessing step: aggregate special dimensions into a new Euclidean component
+        if self.use_special_dims:
+            X, self.pm = self._aggregate_special_dims(X)
+
         # Preprocess data
         angles, labels, classes, comparisons_reshaped = self._preprocess(X=X, y=y)
 
@@ -330,6 +337,19 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # Fit node
         self.tree = self._fit_node(angles=angles, labels=labels, comparisons=comparisons_reshaped, depth=self.max_depth)
+
+    def _aggregate_special_dims(self, X: TT["batch ambient_dim"]) -> Tuple[TT["batch ambient_dim"], ProductManifold]:
+        special_dims = []
+        for i, M in enumerate(self.pm.P):
+            if M.type in ["H", "S"]:
+                dim = self.pm.man2dim[i][0]
+                special_dims.append(X[:, dim : dim + 1])
+        if len(special_dims) > 0:
+            X = torch.cat([X] + special_dims, dim=1)
+            self.signature = self.pm.signature + [(0, len(special_dims))]
+        else:
+            self.signature = self.pm.signature
+        return X, ProductManifold(self.signature)
 
     def _fit_node(
         self,
@@ -395,8 +415,11 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         return self._traverse(x, node.left) if self._left(x, node) else self._traverse(x, node.right)
 
+    @torch.no_grad()
     def predict_proba(self, X: TT["batch intrinsic_dim"]) -> TT["batch n_classes"]:
         """Predict class probabilities for samples in X"""
+        if self.use_special_dims:
+            X, _ = self._aggregate_special_dims(X)
         angles, _, _, _ = self._preprocess(X=X)
         if self.permutations is not None:
             angles = angles[:, self.permutations]
@@ -422,6 +445,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self,
         pm,
         task,
+        use_special_dims=True,
         max_depth=3,
         min_samples_leaf=1,
         min_samples_split=2,
@@ -440,6 +464,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.min_samples_leaf = tree_kwargs["min_samples_leaf"] = min_samples_leaf
         self.min_samples_split = tree_kwargs["min_samples_split"] = min_samples_split
         self.min_impurity_decrease = tree_kwargs["min_impurity_decrease"] = min_impurity_decrease
+        self.use_special_dims = tree_kwargs["use_special_dims"] = use_special_dims
 
         # Random forest hyperparameters
         self.n_estimators = n_estimators
@@ -457,8 +482,8 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         elif self.max_features == "sqrt":
             n_cols_sample = torch.ceil(torch.tensor(n_cols**0.5)).int()
         elif self.max_features == "log2":
-            n_cols_sample = torch.ceil(torch.log2(torch.tensor(d))).int()
-        elif self.max_features == "none":
+            n_cols_sample = torch.ceil(torch.log2(torch.tensor(n_cols))).int()
+        elif self.max_features == "none" or self.max_features is None:
             n_cols_sample = n_cols
         else:
             raise ValueError(f"Unknown max_features parameter: {self.max_features}")
@@ -469,11 +494,22 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
 
         return idx_sample, idx_dim
 
+    @torch.no_grad()
     def fit(self, X: TT["batch ambient_dim"], y: TT["batch"]):
         """Preprocess and fit an ensemble of trees on subsampled data"""
+        # Pre-preprocessing step: aggregate special dimensions
+        if self.use_special_dims:
+            X, self.pm = self.trees[0]._aggregate_special_dims(X)
+            for tree in self.trees:
+                tree.pm = self.pm
+
         # Can use any tree to preprocess X and y
         angles, labels, classes, comparisons = self.trees[0]._preprocess(X=X, y=y)
         self.classes_ = classes
+
+        # Use seed here
+        if self.random_state is not None:
+            torch.manual_seed(self.random_state)
 
         # Subsample - just the indices
         n, d = angles.shape
@@ -491,6 +527,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
             )
         return self
 
+    @torch.no_grad()
     def predict_proba(self, X: TT["batch intrinsic_dim"]) -> TT["batch n_classes"]:
         """Predict class probabilities for samples in X"""
         return torch.stack([tree.predict_proba(X) for tree in self.trees]).mean(dim=0)

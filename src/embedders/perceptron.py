@@ -9,14 +9,14 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
         self.patience = patience  # Number of consecutive epochs without improvement to consider convergence
         self.classes_ = None
         self.classifiers_ = {}  # Dictionary to store classifiers for one-vs-rest approach
-        self.R = []  # To store maximum radius for each hyperbolic manifold
+        # self.R = []  # To store maximum radius for each hyperbolic manifold
 
     def fit(self, X, y):
         # Identify unique classes for multiclass classification
         self.classes_ = torch.unique(y).tolist()
 
-        # Compute maximum radius for each manifold.
-        self.R = [M.scale for M in self.pm.P]
+        # # Compute maximum radius for each manifold.
+        # self.R = [M.scale for M in self.pm.P]
 
         # Relabel y to -1 and 1 for binary classification per class
         for class_label in self.classes_:
@@ -47,19 +47,23 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
 
                             for i, (M, x) in enumerate(zip(self.pm.P, self.pm.factorize(X))):
                                 # Compute kernel matrix between x[n:n+1] and all training points
+                                ip = M.manifold.inner(x[n : n + 1], x)
                                 if M.type == "E":
-                                    K += M.scale * M.manifold.inner(x[n : n + 1], x)  # Kernel matrix for Euclidean
-                                elif M.type == "S":
-                                    K += M.scale * torch.asin(
-                                        torch.clamp(M.manifold.inner(x[n : n + 1], x), -1, 1)
-                                    )  # Kernel matrix for Spherical
-                                elif M.type == "H":
-                                    K += M.scale * torch.asin(
-                                        torch.clamp((self.R[i] ** -2) * M.manifold.inner(x[n : n + 1], x), -1, 1)
-                                    )  # Kernel matrix for Hyperbolic
+                                    K += M.scale * ip
+                                else:
+                                    K += M.scale * torch.asin(torch.clamp(ip, -1, 1))
+                                # elif M.type == "S":
+                                #     K += M.scale * torch.asin(torch.clamp(ip, -1, 1))
+                                # elif M.type == "H":
+                                #     K += M.scale * torch.asin(
+                                #         # torch.clamp((self.R[i] ** -2) * M.manifold.inner(x[n : n + 1], x), -1, 1)
+                                #         torch.clamp(ip, -1, 1)
+                                #     )  # Kernel matrix for Hyperbolic
+                                #     # I removed R because the maximum radius is handled by the Scaled class, not by the
+                                #     # curvature of the manifold itself — therefore R=1 always.
 
                             # Update decision function using the computed kernel
-                            g += binary_y[n] * X[n]  # Update with current point only
+                            g += binary_y[n] * K * X[n]  # Update with current point only
                             errors += 1  # Track the number of errors in this epoch
 
                     # Convergence check based on error improvement
