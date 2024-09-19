@@ -34,10 +34,12 @@ def compute_kernel_and_norm_manifold(
     elif manifold.type == "H":
         # K_H is asinh(R^-2 * Lorentz inner products) * sqrt(-C_H)
         C_H = abs(manifold.curvature)
-        R = -1 * manifold.scale
+        # R = -1 * manifold.scale
+        R = (X_source @ X_target.T).sqrt().max()
         K = torch.asinh(torch.clamp(ip / R**2, -1, 1)) * C_H**0.5
-        norm = torch.tensor(C_H)
+        # norm = torch.tensor(C_H)
         # norm is sqrt(-C_H)
+        norm = torch.asinh(-(R**2) * C_H)
 
     return K, norm
 

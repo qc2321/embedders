@@ -16,10 +16,6 @@ from .metrics import distortion_loss, d_avg
 from .manifolds import ProductManifold
 
 
-def _resample(x_embed, nan_rows, pm, dims, man2dim, device):
-    raise NotImplementedError
-
-
 def train_coords(
     pm: ProductManifold,
     dists: TensorType["n_points", "n_points"],
@@ -58,13 +54,6 @@ def train_coords(
 
         # Actual training loop
         for i in range(n_iters):
-            # Complicated NaN resampling logic
-            with torch.no_grad():
-                nan_rows = torch.where(torch.isnan(pm.x_embed))[0]
-                if len(nan_rows) > 0:
-                    break
-                    _resample(x_embed, nan_rows, pm, dims, man2dim, device)
-
             pm.opt.zero_grad()
             dist_est = pm.pdist(pm.x_embed)
             L = distortion_loss(dist_est, dists)

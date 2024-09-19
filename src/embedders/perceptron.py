@@ -9,49 +9,11 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
         self.max_epochs = max_epochs
         self.patience = patience  # Number of consecutive epochs without improvement to consider convergence
         self.classes_ = None
-        self.classifiers_ = {}  # Dictionary to store classifiers for one-vs-rest approach
         if weights is None:
             self.weights = torch.ones(len(pm.P), dtype=torch.float32)
         else:
             assert len(weights) == len(pm.P), "Number of weights must match the number of manifolds."
             self.weights = weights
-
-    # # def fit(self, X, y):
-    #     # Identify unique classes for multiclass classification
-    #     self.classes_ = torch.unique(y).tolist()
-
-    #     # Precompute kernel matrix
-    #     Ks, _ = product_kernel(self.pm, X, None)
-    #     K = torch.ones(X.shape[0], X.shape[0], dtype=X.dtype, device=X.device)
-    #     for K_m, w in zip(Ks, self.weights):
-    #         K += w * K_m
-
-    #     # Relabel y to -1 and 1 for binary classification per class
-    #     for class_label in self.classes_:
-    #         # Binary classification shortcut
-    #         if len(self.classes_) == 2 and class_label == self.classes_[1]:
-    #             self.classifiers_[class_label] = -1 * self.classifiers_[self.classes_[0]]
-
-    #         else:
-    #             binary_y = torch.where(y == class_label, 1, -1)  # One-vs-rest relabeling
-
-    #             # Initialize decision function g for this binary classifier
-    #             g = torch.zeros(X.shape[1], dtype=X.dtype, device=X.device)
-
-    #             n_epochs = 0
-    #             i = 0
-
-    #             while n_epochs < self.max_epochs:
-    #                 if torch.sign(X[i] @ g) != binary_y[i]:
-    #                     g += binary_y[i] * K[i] @ X
-    #                 i = (i + 1) % X.shape[0]
-
-    #                 n_epochs += 1
-
-    #             # Store the classifier (decision function) for the current class
-    #             self.classifiers_[class_label] = g
-
-    #     return self
 
     def fit(self, X, y):
         # Identify unique classes for multiclass classification
@@ -63,7 +25,6 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
         K = torch.ones((n_samples, n_samples), dtype=X.dtype, device=X.device)
         for K_m, w in zip(Ks, self.weights):
             K += w * K_m
-        # K = X @ X.T
 
         # Store training data and labels for prediction
         self.X_train_ = X
@@ -71,6 +32,9 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
 
         # Initialize dictionary to store alpha coefficients for each class
         self.alpha = {}
+
+        # For patience checking
+        best_epoch, least_errors = 0, n_samples + 1
 
         for class_label in self.classes_:
             # One-vs-rest labels
@@ -93,6 +57,13 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
                 if not misclassified.any():
                     break
 
+                # Test patience
+                n_errors = misclassified.sum().item()
+                if n_errors < least_errors:
+                    best_epoch, least_errors = epoch, n_errors
+                if epoch - best_epoch >= self.patience:
+                    break
+
                 # Update alpha coefficients for misclassified samples
                 alpha[misclassified] += 1
 
@@ -100,17 +71,6 @@ class ProductSpacePerceptron(BaseEstimator, ClassifierMixin):
             self.alpha[class_label] = alpha
 
         return self
-
-    # def predict_proba(self, X):
-    #     # Initialize matrix to store decision values for each class
-    #     decision_values = torch.zeros((X.shape[0], len(self.classes_)), dtype=X.dtype, device=X.device)
-
-    #     # Compute decision values for each classifier
-    #     for idx, class_label in enumerate(self.classes_):
-    #         g = self.classifiers_[class_label]
-    #         decision_values[:, idx] = X @ g
-
-    #     return decision_values
 
     def predict_proba(self, X):
         n_samples = X.shape[0]
