@@ -63,7 +63,7 @@ def benchmark(
         "tangent_dt",
         "tangent_rf",
         "knn",
-        # "ps_perceptron",
+        "ps_perceptron",
         # "svm",
     ],
     max_depth: int = 3,

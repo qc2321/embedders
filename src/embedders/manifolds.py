@@ -47,6 +47,15 @@ class Manifold:
         self.mu0 = self.mu0.to(device)
         return self
 
+    def inner(self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]) -> TT["n_points1", "n_points2"]:
+        """Not inherited because of weird broadcasting stuff, plus need for scale."""
+        # This ensures we compute the right inner product for all manifolds (flip sign of dim 0 for hyperbolic)
+        X_fixed = torch.cat([-X[:, 0:1], X[:, 1:]], dim=1) if self.type == "H" else X
+
+        # This prevents dividing by zero in the Euclidean case
+        scaler = 1 / abs(self.curvature) if self.type != "E" else 1
+        return X_fixed @ Y.T * scaler
+
     def dist(self, X: TT["n_points1", "n_dim"], Y: TT["n_points2", "n_dim"]) -> TT["n_points1", "n_points2"]:
         """Inherit distance function from the geoopt manifold."""
         # if self.type == "E":
