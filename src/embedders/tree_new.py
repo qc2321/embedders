@@ -44,6 +44,7 @@ def _get_info_gains(
         comparisons: (query_batch, dims, key_batch) tensor of comparisons
         labels: (query_batch, n_classes) tensor of one-hot labels
         eps: small number to prevent division by zero
+        half: whether to use float16
 
     Outputs:
         ig: (query_batch, dims) tensor of information gains
@@ -104,8 +105,106 @@ def _get_info_gains(
 
     return ig
 
+def _get_info_gains_nobatch(
+    angles: TT["batch n_dims"],
+    labels: TT["batch n_classes"],
+    criterion: Literal["gini", "mse"] = "gini",
+    min_values_leaf: int = 1,
+    eps: float = 1e-10,
+    batch_size = 256,
+) -> TT["batch dims"]:
+    """
+    Given angles matrix and labels, return information gain for each possible split.
+
+    Args:
+        angles: (batch, dims) tensor of angles
+        labels: (query_batch, n_classes) tensor of one-hot labels
+        eps: small number to prevent division by zero
+        half: whether to use float16
+
+    Outputs:
+        ig: (query_batch, dims) tensor of information gains
+    """
+    # Matrix-multiply to get counts of labels in left and right splits
+    if criterion == "gini":
+        pos_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
+        neg_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
+
+        for d in range(angles.shape[1]):
+            for batch_start in range(0, angles.shape[0], batch_size):
+                batch_end = min(batch_start + batch_size, angles.shape[0])
+                i_batch = torch.arange(batch_start, batch_end, device=angles.device)
+
+                # Expanding angles for broadcasting over the batch
+                angles_d = angles[:, d].unsqueeze(0).expand(batch_end - batch_start, -1)  # [batch_size, angles.shape[0]]
+                angles_i_d = angles[i_batch, d].unsqueeze(1)  # [batch_size, 1]
+
+                mask = _angular_greater(angles_d, angles_i_d)  # [batch_size, angles.shape[0]]
+
+                # Expanding the labels to match the broadcasting needs of the mask
+                pos_labels_entry = torch.matmul(mask.float(), labels)  # [batch_size, labels.shape[1]]
+                neg_labels_entry = torch.matmul((~mask).float(), labels)  # [batch_size, labels.shape[1]]
+
+                # Assign the calculated values to the respective positions in the final tensors
+                pos_labels[i_batch, d, :] = pos_labels_entry.sum(dim=0)
+                neg_labels[i_batch, d, :] = neg_labels_entry.sum(dim=0)
+
+
+        # Total counts are sums of label counts
+        n_pos = pos_labels.sum(dim=-1) + eps
+        n_neg = neg_labels.sum(dim=-1) + eps
+        n_total = n_pos + n_neg
+
+        # Probabilities are label counts divided by total counts, when Gini is used
+        pos_probs = pos_labels / n_pos.unsqueeze(-1)
+        neg_probs = neg_labels / n_neg.unsqueeze(-1)
+        total_probs = (pos_labels + neg_labels) / n_total.unsqueeze(-1)
+
+        # Gini impurity is 1 - sum(prob^2)
+        gini_pos = 1 - (pos_probs**2).sum(dim=-1)
+        gini_neg = 1 - (neg_probs**2).sum(dim=-1)
+        gini_total = 1 - (total_probs**2).sum(dim=-1)
+
+    # For MSE, use the mean of the regression labels to compute MSE (i.e. look at variance)
+    elif criterion == "mse":
+        pos_sums = (comparisons @ labels).float()
+        neg_sums = ((1 - comparisons) @ labels).float()
+
+        # Total counts are sums of comparisons
+        n_pos = comparisons.sum(dim=-1) + eps
+        n_neg = (1 - comparisons).sum(dim=-1) + eps
+        n_total = n_pos + n_neg
+
+        # Means should be computed in a slightly odd way, since we want to use n_pos and n_neg
+        pos_means = pos_sums / n_pos
+        neg_means = neg_sums / n_neg
+        all_means = labels.mean()  # Should be a scalar
+
+        # Compute MSE using the comparisons and the means
+        pos_se = ((labels[:, None, None] - pos_means) ** 2).permute(1, 2, 0)
+        neg_se = ((labels[:, None, None] - neg_means) ** 2).permute(1, 2, 0)
+        pos_mse = (comparisons * pos_se).sum(dim=-1) / n_pos
+        neg_mse = ((1 - comparisons) * neg_se).sum(dim=-1) / n_neg
+        total_mse = ((labels - all_means) ** 2).mean()
+
+        # Just reuse these variable names for now
+        gini_pos, gini_neg, gini_total = pos_mse, neg_mse, total_mse
+
+    # Information gain is the total gini impurity minus the weighted average of the new gini impurities
+    ig = gini_total - (gini_pos * n_pos + gini_neg * n_neg) / n_total
+
+    assert not ig.isnan().any()  # Ensure no NaNs
+
+    # Set information gain to zero if the split is invalid
+    invalid_mask = torch.logical_or(n_pos < min_values_leaf, n_neg < min_values_leaf)
+    ig[invalid_mask] = 0.0
+
+    return ig
+
+
 
 def _get_split(
+    mask: TT["query_batch"],
     angles: TT["query_batch dims"],
     comparisons: TT["query_batch dims key_batch"],
     labels: TT["query_batch n_classes"],
@@ -119,6 +218,7 @@ def _get_split(
     Split comparisons and labels into negative and positive classes
 
     Args:
+        mask: (query_batch, key_batch) tensor of booleans
         angles: (query_batch, dims) tensor of angles
         comparisons: (query_batch, dims, key_batch) tensor of comparisons
         labels: (query_batch, n_classes) tensor of one-hot labels
@@ -138,7 +238,7 @@ def _get_split(
         )
     """
     # Get the split mask without creating an intermediate boolean tensor
-    mask = comparisons[n, d].bool()
+    # mask = comparisons[n, d].bool()
 
     # Use torch.where to avoid creating intermediate tensors
     # Bear in mind, "mask" is typically a float, so we have to be clever
@@ -148,8 +248,11 @@ def _get_split(
     # Split the comparisons and labels using advanced indexing
     angles_neg = angles[neg_indices]
     angles_pos = angles[pos_indices]
-    comparisons_neg = comparisons[neg_indices][:, :, neg_indices]
-    comparisons_pos = comparisons[pos_indices][:, :, pos_indices]
+    if len(comparisons) != 0: # Handle nonbatched case better
+        comparisons_neg = comparisons[neg_indices][:, :, neg_indices]
+        comparisons_pos = comparisons[pos_indices][:, :, pos_indices]
+    else:
+        comparisons_pos = comparisons_neg = comparisons
     labels_neg = labels[neg_indices]
     labels_pos = labels[pos_indices]
 
@@ -177,6 +280,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         min_impurity_decrease=0.0,
         task: Literal["classification", "regression"] = "classification",
         use_special_dims=False,
+        batch_size=None
     ):
         # Store hyperparameters
         self.pm = pm
@@ -185,6 +289,13 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.min_samples_split = min_samples_split
         self.min_impurity_decrease = min_impurity_decrease
         self.use_special_dims = use_special_dims
+
+        # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
+        self.batch_size = batch_size
+        if batch_size is not None:
+            self.batched = False
+        else:
+            self.batched = True
 
         # Task-specific stuff
         self.task = task
@@ -230,7 +341,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                 print("Warning: y contains non-integer values. Try regression instead.")
 
         # Process X-values into angles based on the signature
-        angles = torch.zeros((X.shape[0], self.pm.dim), device=X.device)
+        angles = torch.zeros((X.shape[0], self.pm.dim), device=X.device, dtype=X.dtype)
         for i, M in enumerate(self.pm.P):
             target_idx = self.pm.man2intrinsic[i]
             dims = self.pm.man2dim[i]
@@ -238,16 +349,16 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                 num = X[:, dims[0] : dims[0] + 1]
                 denom = X[:, dims[1:]]
             elif M.type == "E":
-                num = torch.ones(1, device=X.device)
+                num = torch.ones(1, device=X.device, dtype=X.dtype)
                 denom = X[:, dims]
             angles[:, target_idx] = torch.atan2(num, denom)
 
         # Create a tensor of comparisons
-        comparisons = _angular_greater(angles, angles)
-
-        # Reshape the comparisons tensor
-        # comparisons_reshaped = comparisons.permute(0, 2, 1)
-        comparisons_reshaped = comparisons.permute(1, 2, 0)
+        if self.batched:
+            comparisons = _angular_greater(angles, angles)
+            comparisons_reshaped = comparisons.permute(1, 2, 0)
+        else:
+            comparisons_reshaped = torch.tensor([])
 
         # One-hot encode labels
         if y is not None and self.task == "classification":
@@ -260,8 +371,12 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         else:
             classes = torch.tensor([])
             labels = torch.tensor([])
+        labels = labels.to(dtype=X.dtype)
+        # labels = labels.to_sparse()
+        comparisons_reshaped = comparisons_reshaped.to(dtype=X.dtype)
+        # comparisons_reshaped = comparisons_reshaped.to_sparse()
 
-        return angles, labels.float(), classes, comparisons_reshaped.float()
+        return angles, labels, classes, comparisons_reshaped
 
     def _get_best_split(
         self,
@@ -292,13 +407,17 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # We have the angle, but ideally we would like the *midpoint* angle.
         # So we need to grab the closest angle from the negative class:
-        if (comparisons[n, d] == 1.0).all():
+        if self.batched:
+            angle_comparisons = comparisons[n, d]
+        else:
+            angle_comparisons = _angular_greater(angles[:, d], theta_pos).flatten()
+        if (angle_comparisons == 1.).all():
             theta_neg = theta_pos
             # TODO: replace this with something better, e.g. make "circular_greater" strict and make the pos_class the
             # smallest theta where this is 1.
         else:
-            n_neg = (angles[comparisons[n, d] == 0.0, d] - theta_pos).abs().argmin()
-            theta_neg = angles[comparisons[n, d] == 0.0, d][n_neg]
+            n_neg = (angles[angle_comparisons == 0.0, d] - theta_pos).abs().argmin()
+            theta_neg = angles[angle_comparisons == 0.0, d][n_neg]
 
         # Get manifold
         if self.permutations is not None:
@@ -372,11 +491,16 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             return node
 
         # Check halting conditions
-        if depth == 0 or comparisons.shape[0] < self.min_samples_split:
+        if depth == 0 or labels.shape[0] < self.min_samples_split:
             return _halt(labels)
 
         # The main loop is just the functions we've already defined
-        ig = _get_info_gains(comparisons=comparisons, labels=labels, criterion=self.criterion)
+        if self.batched:
+            ig = _get_info_gains(comparisons=comparisons, labels=labels, criterion=self.criterion)
+        else:
+            ig = _get_info_gains_nobatch(
+                angles=angles, labels=labels, criterion=self.criterion, batch_size=self.batch_size
+            )
 
         # Check if we have a valid split
         if ig.max() <= self.min_impurity_decrease:
@@ -384,8 +508,12 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
         # Get the best split
         n, d, theta = self._get_best_split(ig=ig, angles=angles, comparisons=comparisons)
+        if self.batched:
+            mask = comparisons[n, d].bool()
+        else:
+            mask = _angular_greater(angles[:, d], theta).flatten()
         (angles_neg, comparisons_neg, labels_neg), (angles_pos, comparisons_pos, labels_pos) = _get_split(
-            angles=angles, comparisons=comparisons, labels=labels, n=n, d=d
+            mask=mask, angles=angles, comparisons=comparisons, labels=labels, n=n, d=d
         )
         node = DecisionNode(feature=d.item(), theta=theta.item())
         self.nodes.append(node)
@@ -405,7 +533,9 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
 
     def _left(self, angles_row: TT["intrinsic_dim"], node: DecisionNode) -> bool:
         """Boolean: Go left? Works on a preprocessed input vector."""
-        return _angular_greater(torch.tensor(node.theta).flatten(), angles_row[node.feature].flatten()).item()
+        return _angular_greater(
+            torch.tensor(node.theta, device=angles_row.device).flatten(), angles_row[node.feature].flatten()
+        ).item()
 
     def _traverse(self, x: TT["intrinsic_dim"], node: DecisionNode) -> DecisionNode:
         """Traverse a decision tree for a single point"""
@@ -444,8 +574,8 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         pm,
-        task,
-        use_special_dims=True,
+        task: Literal["classification", "regression"] = "classification",
+        use_special_dims=False,
         max_depth=3,
         min_samples_leaf=1,
         min_samples_split=2,
@@ -453,6 +583,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         n_estimators=100,
         max_features="sqrt",
         max_samples=1.0,
+        batch_size=None,
         random_state=None,
         n_jobs=-1,
     ):
@@ -466,6 +597,13 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.min_impurity_decrease = tree_kwargs["min_impurity_decrease"] = min_impurity_decrease
         self.use_special_dims = tree_kwargs["use_special_dims"] = use_special_dims
 
+        # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
+        self.batch_size = batch_size
+        if batch_size is not None:
+            self.batched = False
+        else:
+            self.batched = True
+        
         # Random forest hyperparameters
         self.n_estimators = n_estimators
         self.max_features = max_features
@@ -506,6 +644,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         # Can use any tree to preprocess X and y
         angles, labels, classes, comparisons = self.trees[0]._preprocess(X=X, y=y)
         self.classes_ = classes
+        # print(classes)
 
         # Use seed here
         if self.random_state is not None:
@@ -519,10 +658,15 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         for tree, idx_sample, idx_dim in zip(self.trees, idx_sample_all, idx_dim_all):
             tree.permutations = idx_dim
             tree.classes_ = classes
+            if self.batched:
+                comparisons_subsample = comparisons[idx_sample][:, idx_dim][:, :, idx_sample]
+            else:
+                comparisons_subsample = comparisons
             tree.tree = tree._fit_node(
                 angles=angles[idx_sample][:, idx_dim],
                 labels=labels[idx_sample],
-                comparisons=comparisons[idx_sample][:, idx_dim][:, :, idx_sample],
+                # comparisons=comparisons[idx_sample][:, idx_dim][:, :, idx_sample],
+                comparisons=comparisons_subsample,
                 depth=self.max_depth,
             )
         return self

@@ -249,6 +249,10 @@ class ProductManifold(Manifold):
             ambient_dims = self.man2dim[i]
             for j, k in zip(intrinsic_dims, ambient_dims[-len(intrinsic_dims) :]):
                 self.projection_matrix[j, k] = 1.0
+        
+
+    def params(self):
+        return [x._log_scale for x in self.manifold.manifolds]
 
     def to(self, device: str):
         self.device = device
