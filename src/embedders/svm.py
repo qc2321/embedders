@@ -6,11 +6,12 @@ from .kernel import product_kernel
 
 
 class ProductSpaceSVM(BaseEstimator, ClassifierMixin):
-    def __init__(self, pm, weights=None, h_constraints=True, e_constraints=True, s_constraints=True):
+    def __init__(self, pm, weights=None, h_constraints=True, e_constraints=True, s_constraints=True, epsilon=1e-5):
         self.pm = pm
         self.h_constraints = h_constraints
         self.s_constraints = s_constraints
         self.e_constraints = e_constraints
+        self.eps = epsilon
         if weights is None:
             self.weights = torch.ones(len(pm.P), dtype=torch.float32)
         else:
@@ -68,8 +69,8 @@ class ProductSpaceSVM(BaseEstimator, ClassifierMixin):
                 elif M.type == "H" and self.h_constraints:
                     K_component_pos = K_component.clip(0, None)
                     K_component_neg = K_component.clip(None, 0)
-                    constraints.append(cvxpy.quad_form(beta, K_component_neg) <= 1e-5)
-                    constraints.append(cvxpy.quad_form(beta, K_component_pos) <= 1e-5 + norm)
+                    constraints.append(cvxpy.quad_form(beta, K_component_neg) <= self.eps)
+                    constraints.append(cvxpy.quad_form(beta, K_component_pos) <= self.eps + norm)
 
             # CVXPY solver
             cvxpy.Problem(

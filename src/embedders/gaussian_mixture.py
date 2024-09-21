@@ -7,6 +7,7 @@ from .manifolds import ProductManifold
 from typing import Optional, Tuple, Literal
 
 
+@torch.no_grad()
 def gaussian_mixture(
     pm: ProductManifold,
     num_points: int = 1_000,
@@ -75,11 +76,12 @@ def gaussian_mixture(
     assert samples.shape == (num_points, pm.ambient_dim)
 
     # Map clusters to classes
-    cluster_to_class = [i for i in range(num_classes)]
+    cluster_to_class = list(range(2))
     for i in range(num_clusters - num_classes):
         cluster_to_class.append(torch.randint(0, num_classes, (1,)).item())
     cluster_to_class = torch.tensor(cluster_to_class)
     assert cluster_to_class.shape == (num_clusters,)
+    assert torch.unique(cluster_to_class).shape == (num_classes,)
 
     # Generate outputs
     if task == "classification":

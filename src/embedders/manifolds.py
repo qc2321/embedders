@@ -293,9 +293,10 @@ class ProductManifold(Manifold):
         # x_embed = geoopt.ManifoldParameter(x_embed, manifold=self.manifold)
         return x_embed
 
-    def factorize(self, X: TT["n_points", "n_dim"]) -> List[TT["n_points", "n_dim_manifold"]]:
+    def factorize(self, X: TT["n_points", "n_dim"], intrinsic=False) -> List[TT["n_points", "n_dim_manifold"]]:
         """Factorize the embeddings into the individual manifolds."""
-        return [X[..., self.man2dim[i]] for i in range(len(self.P))]
+        dims_dict = self.man2intrinsic if intrinsic else self.man2dim
+        return [X[..., dims_dict[i]] for i in range(len(self.P))]
 
     def sample(
         self,
