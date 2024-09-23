@@ -1,5 +1,6 @@
 import torch
 from torchtyping import TensorType as TT
+from typing import Tuple
 import networkx as nx
 import pandas as pd
 import numpy as np
@@ -21,13 +22,8 @@ def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list)
 
 
 def load_cities(
-    # cities_path: str = "../../data/cities.txt"
-    cities_path: str = Path(__file__).parent.parent.parent
-    / "data"
-    / "graphs"
-    / "cities"
-    / "cities.txt",
-) -> TT["n_points", "n_points"]:
+    cities_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cities" / "cities.txt",
+) -> TT["n_points", "n_points"], None, None:
     dists_flattened = []
     with open(cities_path) as f:
         for line in f:
@@ -42,7 +38,7 @@ def load_cities(
 
 def load_cs_phds(
     cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds" / "cs_phds.txt",
-) -> torch.Tensor:
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     G = nx.Graph()
 
     with open(cs_phds_path, "r") as f:
@@ -69,7 +65,7 @@ def load_cs_phds(
 
     phd_dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(phd_dists), labels, nx.to_numpy_array(G)
+    return torch.tensor(phd_dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G))
 
 
 def load_facebook():
@@ -87,7 +83,7 @@ def load_polblogs(
     / "graphs"
     / "polblogs"
     / "polblogs_labels.tsv",
-) -> TT["n_points", "n_points"]:
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     # Load the graph
     G = nx.from_scipy_sparse_array(mmread(polblogs_path))
     dists, idx = _top_cc_dists(G)
@@ -98,13 +94,10 @@ def load_polblogs(
     # Filter to match G
     polblogs_labels = polblogs_labels[idx].tolist()
 
-    if labels:
-        return torch.tensor(dists), polblogs_labels
-    else:
-        return torch.tensor(dists)
+    return torch.tensor(dists), torch.tensor(polblogs_labels), torch.tensor(nx.to_numpy_array(G))
 
 
-def _load_network_repository(edges_path, labels_path):
+def _load_network_repository(edges_path, labels_path) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     # Edges
     G = nx.read_edgelist(edges_path, delimiter=",", data=[("weight", int)], nodetype=int)
 
@@ -117,20 +110,14 @@ def _load_network_repository(edges_path, labels_path):
     dists, idx = _top_cc_dists(G)
 
     labels = [G.nodes[i]["label"] for i in idx]
-    return torch.tensor(dists), labels
+    return torch.tensor(dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G))
+
 
 def load_cora(
     cora_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.edges",
     cora_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.node_labels",
-    labels: bool = False,
-) -> TT["n_points", "n_points"]:
-    dists, labels = _load_network_repository(cora_edges_path, cora_labels_path)
-
-    if labels:
-        return torch.tensor(dists), labels
-    else:
-        return torch.tensor(dists)
-
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
+    return _load_network_repository(cora_edges_path, cora_labels_path)
 
 def load_citeseer(
     citeseer_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "citeseer" / "citeseer.edges",
@@ -139,99 +126,75 @@ def load_citeseer(
     / "graphs"
     / "citeseer"
     / "citeseer.node_labels",
-    labels: bool = False,
-):
-    dists, labels = _load_network_repository(citeseer_edges_path, citeseer_labels_path)
-
-    if labels:
-        return torch.tensor(dists), labels
-    else:
-        return torch.tensor(dists)
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
+    return _load_network_repository(citeseer_edges_path, citeseer_labels_path)
 
 
 def load_pubmed(
     pubmed_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "pubmed" / "pubmed.edges",
     pubmed_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "pubmed" / "pubmed.node_labels",
-    labels: bool = False,
-):
-    dists, labels = _load_network_repository(pubmed_edges_path, pubmed_labels_path)
-
-    if labels:
-        return torch.tensor(dists), labels
-    else:
-        return torch.tensor(dists)
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
+    return _load_network_repository(pubmed_edges_path, pubmed_labels_path)
 
 
 def load_karate_club(
     karate_club_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "karate" / "karate.gml",
-    labels: bool = False,
-):
+) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
     G = nx.read_gml(karate_club_path, label="id")
 
     dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(dists), nx.to_numpy_array(G)
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G))
 
 
 def load_lesmis(
     lesmis_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "lesmis" / "lesmis.gml",
-    labels: bool = False,
-):
+) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
     G = nx.read_gml(lesmis_path, label="id")
 
     dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(dists), nx.to_numpy_array(G)
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G))
 
 
 def load_adjnoun(
     adjnoun_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "adjnoun" / "adjnoun.gml",
-    labels: bool = False,
-):
+) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
     G = nx.read_gml(adjnoun_path, label="id")
 
     dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(dists), nx.to_numpy_array(G)
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G))
 
 
 def load_blood_cells(
-    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad",
-    labels: bool = False,
-) -> TT["n_points", "n_features"]:
+    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad"
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     with gzip.open(blood_cell_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
     X = torch.tensor(adata.X.todense())
     X = X / X.sum(dim=1, keepdim=True)
 
-    if labels:
-        return X, adata.obs["cell_type"].values
-    else:
-        return X
+    return X, torch.tensor(adata.obs["cell_type"].values), None
 
 
 def load_lymphoma(
-    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad",
-    labels: bool = False,
-):
+    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad"
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     """https://www.10xgenomics.com/resources/datasets/hodgkins-lymphoma-dissociated-tumor-targeted-immunology-panel-3-1-standard-4-0-0"""
     with gzip.open(lymphoma_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
     X = torch.tensor(adata.X.todense())
     X = X / X.sum(dim=1, keepdim=True)
 
-    if labels:
-        return X, adata.obs["cell_type"].values
-    else:
-        return X
+    return X, torch.tensor(adata.obs["cell_type"].values), None
 
 
 def load_cifar_100(
     cifar_data_path=Path(__file__).parent.parent.parent / "data" / "cifar_100" / "cifar-100-python",
-    labels: bool = False,
     coarse: bool = True,
     train: bool = True,
-):
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     # Load data
     split = "train" if train else "test"
     with open(cifar_data_path / split, "rb") as f:
@@ -240,19 +203,15 @@ def load_cifar_100(
     X = X.reshape(-1, 3, 32, 32).permute(0, 2, 3, 1)
     X = X / 255.0
 
-    if labels and coarse:
-        return X, torch.tensor(data[b"coarse_labels"])
-    elif labels and not coarse:
-        return X, torch.tensor(data[b"fine_labels"])
-    else:
-        return X
+    labels = data[b"coarse_labels"] if coarse else data[b"fine_labels"]
+
+    return X, torch.tensor(labels), None
 
 
 def load_mnist(
     mnist_data_path=Path(__file__).parent.parent.parent / "data" / "mnist",
-    labels: bool = False,
     train: bool = True,
-):
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     split = "train" if train else "t10k"
 
     # Load data
@@ -268,22 +227,20 @@ def load_mnist(
     X = torch.tensor(digits).reshape(-1, 28, 28).float()
     X /= 255.0
 
-    if labels:
-        labels = []
-        with open(mnist_data_path / f"{split}-labels-idx1-ubyte", "rb") as f:
-            f.read(8)
-            while True:
-                label = f.read(1)
-                if not label:
-                    break
-                labels.append(int.from_bytes(label, byteorder="big"))
+    # Get labels
+    labels = []
+    with open(mnist_data_path / f"{split}-labels-idx1-ubyte", "rb") as f:
+        f.read(8)
+        while True:
+            label = f.read(1)
+            if not label:
+                break
+            labels.append(int.from_bytes(label, byteorder="big"))
 
-        return X, labels
-    else:
-        return X
+    return X, torch.tensor(labels), None
 
 
-def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
+def load(name: str, **kwargs) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     if name == "cities":
         return load_cities(**kwargs)
     elif name == "cs_phds":
