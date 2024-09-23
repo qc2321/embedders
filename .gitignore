@@ -3,5 +3,5 @@
 *__pycache__/
 *.pyc
 data/MNIST/*
-data/blood_cell_scrna/*
-data/polblogs_embeddings/*
+data/cifar_100/cifar-100-python.tar.gz
+data/cifar_100/cifar-100-python/

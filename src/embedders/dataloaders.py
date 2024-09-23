@@ -8,6 +8,7 @@ from pathlib import Path
 from scipy.io import mmread
 import anndata
 import gzip
+import pickle
 
 
 def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list):
@@ -176,23 +177,90 @@ def load_pubmed(
 
 def load_blood_cells(
     blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad",
+    labels: bool = False,
 ) -> TT["n_points", "n_features"]:
     with gzip.open(blood_cell_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
     X = torch.tensor(adata.X.todense())
     X = X / X.sum(dim=1, keepdim=True)
-    return X, adata.obs["cell_type"].values
+
+    if labels:
+        return X, adata.obs["cell_type"].values
+    else:
+        return X
 
 
 def load_lymphoma(
     lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad",
+    labels: bool = False,
 ):
     """https://www.10xgenomics.com/resources/datasets/hodgkins-lymphoma-dissociated-tumor-targeted-immunology-panel-3-1-standard-4-0-0"""
     with gzip.open(lymphoma_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
     X = torch.tensor(adata.X.todense())
     X = X / X.sum(dim=1, keepdim=True)
-    return X, adata.obs["cell_type"].values
+
+    if labels:
+        return X, adata.obs["cell_type"].values
+    else:
+        return X
+
+
+def load_cifar_100(
+    cifar_data_path=Path(__file__).parent.parent.parent / "data" / "cifar_100" / "cifar-100-python",
+    labels: bool = False,
+    coarse: bool = True,
+    train: bool = True,
+):
+    # Load data
+    split = "train" if train else "test"
+    with open(cifar_data_path / split, "rb") as f:
+        data = pickle.load(f, encoding="bytes")
+    X = torch.tensor(data[b"data"]).float()
+    X = X.reshape(-1, 3, 32, 32).permute(0, 2, 3, 1)
+    X = X / 255.0
+
+    if labels and coarse:
+        return X, torch.tensor(data[b"coarse_labels"])
+    elif labels and not coarse:
+        return X, torch.tensor(data[b"fine_labels"])
+    else:
+        return X
+
+
+def load_mnist(
+    mnist_data_path=Path(__file__).parent.parent.parent / "data" / "mnist",
+    labels: bool = False,
+    train: bool = True,
+):
+    split = "train" if train else "t10k"
+
+    # Load data
+    digits = []
+    with open(mnist_data_path / f"{split}-images-idx3-ubyte", "rb") as f:
+        f.read(16)
+        while True:
+            digit = f.read(28 * 28)
+            if not digit:
+                break
+            digits.append(list(digit))
+
+    X = torch.tensor(digits).reshape(-1, 28, 28).float()
+    X /= 255.0
+
+    if labels:
+        labels = []
+        with open(mnist_data_path / f"{split}-labels-idx1-ubyte", "rb") as f:
+            f.read(8)
+            while True:
+                label = f.read(1)
+                if not label:
+                    break
+                labels.append(int.from_bytes(label, byteorder="big"))
+
+        return X, labels
+    else:
+        return X
 
 
 def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
@@ -212,5 +280,9 @@ def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
         return load_blood_cells(**kwargs)
     elif name == "lymphoma":
         return load_lymphoma(**kwargs)
+    elif name == "cifar_100":
+        return load_cifar_100(**kwargs)
+    elif name == "mnist":
+        return load_mnist(**kwargs)
     else:
         raise ValueError(f"Unknown dataset: {name}")
