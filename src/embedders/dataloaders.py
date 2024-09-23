@@ -6,6 +6,7 @@ import numpy as np
 import shlex
 from pathlib import Path
 from scipy.io import mmread
+import anndata
 
 
 def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list):
@@ -19,8 +20,12 @@ def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list)
 
 def load_cities(
     # cities_path: str = "../../data/cities.txt"
-    cities_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cities" / "cities.txt"
-    ) -> TT["n_points", "n_points"]:
+    cities_path: str = Path(__file__).parent.parent.parent
+    / "data"
+    / "graphs"
+    / "cities"
+    / "cities.txt",
+) -> TT["n_points", "n_points"]:
     dists_flattened = []
     with open(cities_path) as f:
         for line in f:
@@ -34,10 +39,10 @@ def load_cities(
 
 
 def load_cs_phds(
-        # cs_phds_path="../../data/cs_phds.txt", 
-        cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds" / "cs_phds.txt",
-        labels: bool = False
-    ) -> torch.Tensor:
+    # cs_phds_path="../../data/cs_phds.txt",
+    cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds" / "cs_phds.txt",
+    labels: bool = False,
+) -> torch.Tensor:
     G = nx.Graph()
 
     with open(cs_phds_path, "r") as f:
@@ -83,7 +88,11 @@ def load_polblogs(
     # polblogs_path: str = "../../data/graphs/polblogs.mtx",
     # polblogs_labels_path: str = "../../data/graphs/polblogs_labels.tsv",
     polblogs_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "polblogs" / "polblogs.mtx",
-    polblogs_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "polblogs" / "polblogs_labels.tsv",
+    polblogs_labels_path: str = Path(__file__).parent.parent.parent
+    / "data"
+    / "graphs"
+    / "polblogs"
+    / "polblogs_labels.tsv",
     labels=False,
 ) -> TT["n_points", "n_points"]:
     # Load the graph
@@ -102,21 +111,28 @@ def load_polblogs(
         return torch.tensor(dists)
 
 
-def load_cora(
-    cora_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.edges",
-    cora_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.node_labels",
-    labels: bool = False,
-) -> TT["n_points", "n_points"]:
+def _load_network_repository(edges_path, labels_path):
     # Edges
-    G = nx.read_edgelist(cora_edges_path, delimiter=",", data=[("weight", int)], nodetype=int)
+    G = nx.read_edgelist(edges_path, delimiter=",", data=[("weight", int)], nodetype=int)
 
     # Node labels
-    with open(cora_labels_path) as f:
+    with open(labels_path) as f:
         for line in f:
             node, label = line.strip().split(",")
             G.nodes[int(node)]["label"] = int(label)
 
     dists, idx = _top_cc_dists(G)
+
+    labels = [G.nodes[i]["label"] for i in idx]
+    return torch.tensor(dists), labels
+
+
+def load_cora(
+    cora_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.edges",
+    cora_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.node_labels",
+    labels: bool = False,
+) -> TT["n_points", "n_points"]:
+    dists, labels = _load_network_repository(cora_edges_path, cora_labels_path)
 
     if labels:
         labels = [G.nodes[i]["label"] for i in idx]
@@ -125,24 +141,55 @@ def load_cora(
         return torch.tensor(dists)
 
 
-def load_blood_cells():
-    raise NotImplementedError
+def load_citeseer(
+    citeseer_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "citeseer" / "citeseer.edges",
+    citeseer_labels_path: str = Path(__file__).parent.parent.parent
+    / "data"
+    / "graphs"
+    / "citeseer"
+    / "citeseer.node_labels",
+    labels: bool = False,
+):
+    dists, labels = _load_network_repository(citeseer_edges_path, citeseer_labels_path)
+
+    if labels:
+        labels = [G.nodes[i]["label"] for i in idx]
+        return torch.tensor(dists), labels
+    else:
+        return torch.tensor(dists)
 
 
-def _load_lymphoma():
+def load_pubmed(
+    pubmed_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "pubmed" / "pubmed.edges",
+    pubmed_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "pubmed" / "pubmed.node_labels",
+    labels: bool = False,
+):
+    dists, labels = _load_network_repository(pubmed_edges_path, pubmed_labels_path)
+
+    if labels:
+        labels = [G.nodes[i]["label"] for i in idx]
+        return torch.tensor(dists), labels
+    else:
+        return torch.tensor(dists)
+
+
+def load_blood_cells(
+    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad",
+) -> TT["n_points", "n_features"]:
+    adata = anndata.read_h5ad(blood_cell_anndata_path)
+    X = torch.tensor(adata.X.todense())
+    X = X / X.sum(dim=1, keepdim=True)
+    return X, adata.obs["cell_type"].values
+
+
+def load_lymphoma(
+    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad",
+):
     """https://www.10xgenomics.com/resources/datasets/hodgkins-lymphoma-dissociated-tumor-targeted-immunology-panel-3-1-standard-4-0-0"""
-    raise NotImplementedError
-
-
-def _load_healthy_donors():
-    """https://www.10xgenomics.com/resources/datasets/pbm-cs-from-a-healthy-donor-targeted-compare-immunology-panel-3-1-standard-4-0-0"""
-    raise NotImplementedError
-
-
-def load_lymphoma_and_healthy_donors():
-    lymphoma = _load_lymphoma()
-    healthy_donors = _load_healthy_donors()
-    raise NotImplementedError
+    adata = anndata.read_h5ad(lymphoma_anndata_path)
+    X = torch.tensor(adata.X.todense())
+    X = X / X.sum(dim=1, keepdim=True)
+    return X, adata.obs["cell_type"].values
 
 
 def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
@@ -160,7 +207,7 @@ def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
         return load_cora(**kwargs)
     elif name == "blood_cells":
         return load_blood_cells(**kwargs)
-    elif name == "lymphoma_and_healthy_donors":
-        return load_lymphoma_and_healthy_donors(**kwargs)
+    elif name == "lymphoma":
+        return load_lymphoma(**kwargs)
     else:
         raise ValueError(f"Unknown dataset: {name}")
