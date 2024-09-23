@@ -37,13 +37,11 @@ def load_cities(
 
     cities_dists = torch.tensor(dists_flattened).reshape(312, 312)
 
-    return cities_dists
+    return cities_dists, None, None
 
 
 def load_cs_phds(
-    # cs_phds_path="../../data/cs_phds.txt",
     cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds" / "cs_phds.txt",
-    labels: bool = False,
 ) -> torch.Tensor:
     G = nx.Graph()
 
@@ -71,11 +69,7 @@ def load_cs_phds(
 
     phd_dists, idx = _top_cc_dists(G)
 
-    if labels:
-        labels = [G.nodes[i]["year"] for i in idx]
-        return torch.tensor(phd_dists), labels
-    else:
-        return torch.tensor(phd_dists)
+    return torch.tensor(phd_dists), labels, nx.to_numpy_array(G)
 
 
 def load_facebook():
@@ -87,15 +81,12 @@ def load_power():
 
 
 def load_polblogs(
-    # polblogs_path: str = "../../data/graphs/polblogs.mtx",
-    # polblogs_labels_path: str = "../../data/graphs/polblogs_labels.tsv",
     polblogs_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "polblogs" / "polblogs.mtx",
     polblogs_labels_path: str = Path(__file__).parent.parent.parent
     / "data"
     / "graphs"
     / "polblogs"
     / "polblogs_labels.tsv",
-    labels=False,
 ) -> TT["n_points", "n_points"]:
     # Load the graph
     G = nx.from_scipy_sparse_array(mmread(polblogs_path))
@@ -169,6 +160,39 @@ def load_pubmed(
         return torch.tensor(dists), labels
     else:
         return torch.tensor(dists)
+
+
+def load_karate_club(
+    karate_club_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "karate" / "karate.gml",
+    labels: bool = False,
+):
+    G = nx.read_gml(karate_club_path, label="id")
+
+    dists, idx = _top_cc_dists(G)
+
+    return torch.tensor(dists), nx.to_numpy_array(G)
+
+
+def load_lesmis(
+    lesmis_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "lesmis" / "lesmis.gml",
+    labels: bool = False,
+):
+    G = nx.read_gml(lesmis_path, label="id")
+
+    dists, idx = _top_cc_dists(G)
+
+    return torch.tensor(dists), nx.to_numpy_array(G)
+
+
+def load_adjnoun(
+    adjnoun_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "adjnoun" / "adjnoun.gml",
+    labels: bool = False,
+):
+    G = nx.read_gml(adjnoun_path, label="id")
+
+    dists, idx = _top_cc_dists(G)
+
+    return torch.tensor(dists), nx.to_numpy_array(G)
 
 
 def load_blood_cells(
