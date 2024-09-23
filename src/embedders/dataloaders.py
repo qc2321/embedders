@@ -17,7 +17,10 @@ def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list)
     return nx.floyd_warshall_numpy(G.subgraph(top_cc)), list(top_cc)
 
 
-def load_cities(cities_path: str = "../../data/cities.txt") -> TT["n_points", "n_points"]:
+def load_cities(
+    # cities_path: str = "../../data/cities.txt"
+    cities_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cities" / "cities.txt"
+    ) -> TT["n_points", "n_points"]:
     dists_flattened = []
     with open(cities_path) as f:
         for line in f:
@@ -30,7 +33,11 @@ def load_cities(cities_path: str = "../../data/cities.txt") -> TT["n_points", "n
     return cities_dists
 
 
-def load_cs_phds(cs_phds_path="../../data/cs_phds.txt", labels: bool = False) -> torch.Tensor:
+def load_cs_phds(
+        # cs_phds_path="../../data/cs_phds.txt", 
+        cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds" / "cs_phds.txt",
+        labels: bool = False
+    ) -> torch.Tensor:
     G = nx.Graph()
 
     with open(cs_phds_path, "r") as f:
@@ -73,8 +80,10 @@ def load_power():
 
 
 def load_polblogs(
-    polblogs_path: str = "../../data/graphs/polblogs.mtx",
-    polblogs_labels_path: str = "../../data/graphs/polblogs_labels.tsv",
+    # polblogs_path: str = "../../data/graphs/polblogs.mtx",
+    # polblogs_labels_path: str = "../../data/graphs/polblogs_labels.tsv",
+    polblogs_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "polblogs" / "polblogs.mtx",
+    polblogs_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "polblogs" / "polblogs_labels.tsv",
     labels=False,
 ) -> TT["n_points", "n_points"]:
     # Load the graph
@@ -85,7 +94,7 @@ def load_polblogs(
     polblogs_labels = pd.read_table(polblogs_labels_path, header=None)[0]
 
     # Filter to match G
-    polblogs_labels = polblogs_labels[idx]
+    polblogs_labels = polblogs_labels[idx].tolist()
 
     if labels:
         return torch.tensor(dists), polblogs_labels
