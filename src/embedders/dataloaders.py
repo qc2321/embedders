@@ -7,6 +7,7 @@ import shlex
 from pathlib import Path
 from scipy.io import mmread
 import anndata
+import gzip
 
 
 def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list):
@@ -176,7 +177,8 @@ def load_pubmed(
 def load_blood_cells(
     blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad",
 ) -> TT["n_points", "n_features"]:
-    adata = anndata.read_h5ad(blood_cell_anndata_path)
+    with gzip.open(blood_cell_anndata_path, "rb") as f:
+        adata = anndata.read_h5ad(f)
     X = torch.tensor(adata.X.todense())
     X = X / X.sum(dim=1, keepdim=True)
     return X, adata.obs["cell_type"].values
@@ -186,7 +188,8 @@ def load_lymphoma(
     lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad",
 ):
     """https://www.10xgenomics.com/resources/datasets/hodgkins-lymphoma-dissociated-tumor-targeted-immunology-panel-3-1-standard-4-0-0"""
-    adata = anndata.read_h5ad(lymphoma_anndata_path)
+    with gzip.open(lymphoma_anndata_path, "rb") as f:
+        adata = anndata.read_h5ad(f)
     X = torch.tensor(adata.X.todense())
     X = X / X.sum(dim=1, keepdim=True)
     return X, adata.obs["cell_type"].values
