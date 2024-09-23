@@ -128,7 +128,6 @@ def _load_network_repository(edges_path, labels_path):
     labels = [G.nodes[i]["label"] for i in idx]
     return torch.tensor(dists), labels
 
-
 def load_cora(
     cora_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.edges",
     cora_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.node_labels",
@@ -137,7 +136,6 @@ def load_cora(
     dists, labels = _load_network_repository(cora_edges_path, cora_labels_path)
 
     if labels:
-        labels = [G.nodes[i]["label"] for i in idx]
         return torch.tensor(dists), labels
     else:
         return torch.tensor(dists)
@@ -155,7 +153,6 @@ def load_citeseer(
     dists, labels = _load_network_repository(citeseer_edges_path, citeseer_labels_path)
 
     if labels:
-        labels = [G.nodes[i]["label"] for i in idx]
         return torch.tensor(dists), labels
     else:
         return torch.tensor(dists)
@@ -169,7 +166,6 @@ def load_pubmed(
     dists, labels = _load_network_repository(pubmed_edges_path, pubmed_labels_path)
 
     if labels:
-        labels = [G.nodes[i]["label"] for i in idx]
         return torch.tensor(dists), labels
     else:
         return torch.tensor(dists)
@@ -276,6 +272,10 @@ def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
         return load_polblogs(**kwargs)
     elif name == "cora":
         return load_cora(**kwargs)
+    elif name == "citeseer":
+        return load_citeseer(**kwargs)
+    elif name == "pubmed":
+        return load_pubmed(**kwargs)
     elif name == "blood_cells":
         return load_blood_cells(**kwargs)
     elif name == "lymphoma":
