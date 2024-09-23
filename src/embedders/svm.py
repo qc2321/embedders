@@ -1,17 +1,28 @@
 import cvxpy
 import torch
+import numpy as np
 
 from sklearn.base import BaseEstimator, ClassifierMixin
 from .kernel import product_kernel
 
 
 class ProductSpaceSVM(BaseEstimator, ClassifierMixin):
-    def __init__(self, pm, weights=None, h_constraints=True, e_constraints=True, s_constraints=True, epsilon=1e-5):
+    def __init__(
+        self,
+        pm,
+        weights=None,
+        h_constraints=True,
+        e_constraints=True,
+        s_constraints=True,
+        task="classification",
+        epsilon=1e-5,
+    ):
         self.pm = pm
         self.h_constraints = h_constraints
         self.s_constraints = s_constraints
         self.e_constraints = e_constraints
         self.eps = epsilon
+        self.task = task
         if weights is None:
             self.weights = torch.ones(len(pm.P), dtype=torch.float32)
         else:
@@ -65,7 +76,7 @@ class ProductSpaceSVM(BaseEstimator, ClassifierMixin):
                     alpha_E = 1.0  # TODO: make this flexible
                     constraints.append(cvxpy.quad_form(beta, K_component) <= alpha_E**2)
                 elif M.type == "S" and self.s_constraints:
-                    constraints.append(cvxpy.quad_form(beta, K_component) <= torch.pi / 2)
+                    constraints.append(cvxpy.quad_form(beta, K_component) <= np.pi / 2)
                 elif M.type == "H" and self.h_constraints:
                     K_component_pos = K_component.clip(0, None)
                     K_component_neg = K_component.clip(None, 0)
@@ -81,3 +92,45 @@ class ProductSpaceSVM(BaseEstimator, ClassifierMixin):
             self.zeta[class_label] = zeta.value
             self.beta[class_label] = beta.value
             self.epsilon[class_label] = epsilon.value
+
+            # Need to store X for prediction
+            self.X_train_ = torch.tensor(X, dtype=torch.float32)
+
+    def predict_proba(self, X):
+        # Ensure X is a torch tensor
+        if not isinstance(X, torch.Tensor):
+            X = torch.tensor(X, dtype=torch.float32)
+
+        # Ensure X is on the same device as the training data
+        device = self.X_train_.device
+        X = X.to(device)
+        n_samples = X.shape[0]
+        n_classes = len(self.classes_)
+
+        # Compute the kernel between training data and test data
+        Ks_test, _ = product_kernel(self.pm, self.X_train_, X)
+        K_test = torch.ones((self.X_train_.shape[0], n_samples), dtype=X.dtype, device=X.device)
+        for K_m, w in zip(Ks_test, self.weights):
+            K_test += w * K_m
+
+        # Convert to NumPy array
+        K_test = K_test.detach().cpu().numpy()
+
+        # Initialize array to store decision function values
+        decision_function = np.zeros((n_samples, n_classes))
+        for idx, class_label in enumerate(self.classes_):
+            beta = self.beta[class_label]  # Shape: (n_train_samples,)
+            # Compute decision function: f(x) = K_test^T @ beta + sum(beta)
+            f = K_test.T @ beta + np.sum(beta)
+            decision_function[:, idx] = f
+
+        # Convert decision function values to probabilities using softmax
+        exp_scores = np.exp(decision_function - np.max(decision_function, axis=1, keepdims=True))
+        probs = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+        return probs
+
+    def predict(self, X):
+        probs = self.predict_proba(X)
+        class_indices = np.argmax(probs, axis=1)
+        predictions = np.array([self.classes_[idx] for idx in class_indices])
+        return predictions

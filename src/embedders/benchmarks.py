@@ -19,6 +19,7 @@ from hyperdt.product_space_perceptron import mix_curv_perceptron
 
 from .tree_new import ProductSpaceDT, ProductSpaceRF
 from .perceptron import ProductSpacePerceptron
+from .svm import ProductSpaceSVM
 from .manifolds import ProductManifold
 
 
@@ -64,6 +65,7 @@ def benchmark(
         "tangent_rf",
         "knn",
         "ps_perceptron",
+        # "ps_svm"
         # "svm",
     ],
     max_depth: int = 3,
@@ -141,6 +143,7 @@ def benchmark(
         rf_class = RandomForestClassifier
         knn_class = KNeighborsClassifier
         svm_class = SVC
+
         perceptron_class = SGDClassifier
     elif task == "regression":
         dt_class = DecisionTreeRegressor
@@ -162,12 +165,12 @@ def benchmark(
         accs["sklearn_rf"] = _score(X_test_np, y_test_np, rf, torch=False)
 
     if "product_dt" in models:
-        psdt = ProductSpaceDT(pm=pm, task=task, **tree_kwargs)
+        psdt = ProductSpaceDT(pm=pm, task=task, use_special_dims=True, **tree_kwargs)
         psdt.fit(X_train, y_train)
         accs["product_dt"] = _score(X_test, y_test_np, psdt, torch=True)
 
     if "product_rf" in models:
-        psrf = ProductSpaceRF(pm=pm, task=task, **tree_kwargs, **rf_kwargs)
+        psrf = ProductSpaceRF(pm=pm, task=task, use_special_dims=True, **tree_kwargs, **rf_kwargs)
         psrf.fit(X_train, y_train)
         accs["product_rf"] = _score(X_test, y_test_np, psrf, torch=True)
 
@@ -217,25 +220,6 @@ def benchmark(
         ptron.fit(X_train_np, y_train_np)
         accs["perceptron"] = _score(X_test_np, y_test_np, ptron, torch=False)
 
-    # if "ps_perceptron" in models:
-    #     if task == "regression":
-    #         accs["ps_perceptron"] = None
-    #     else:
-    #         sig = ",".join([f"{M.type.lower()}{M.dim}" for M in pm.P])
-    #         embed_data = {
-    #             "X_train": X_train_np,
-    #             "X_test": X_test_np,
-    #             "y_train": y_train_np,
-    #             "y_test": y_test_np,
-    #             "max_norm": [M.manifold.inner(x, x).max().item() for M, x in zip(pm.P, pm.factorize(X))],
-    #             "curv_value": [abs(M.curvature) for M in pm.P],
-    #         }
-    #         ps_perceptron = mix_curv_perceptron(
-    #             mix_component=sig, embed_data=embed_data, multiclass=True, max_round=10, max_update=1_000
-    #         )
-    #         y_pred = ps_perceptron.process_data()
-    #         accs["ps_perceptron"] = _score(None, y_test_np, ps_perceptron, y_pred_override=y_pred, torch=False)
-
     if "ps_perceptron" in models:
         psrf = ProductSpacePerceptron(pm=pm)
         psrf.fit(X_train, y_train)
@@ -257,21 +241,9 @@ def benchmark(
         accs["svm"] = _score(train_test_ips, y_test_np, svm, torch=False)
 
     if "ps_svm" in models:
-        if task == "regression":
-            accs["ps_svm"] = None
-        else:
-            sig = ",".join([f"{M.type.lower()}{M.dim}" for M in pm.P])
-            embed_data = {
-                "X_train": X_train_np,
-                "X_test": X_test_np,
-                "y_train": y_train_np,
-                "y_test": y_test_np,
-                "max_norm": [M.manifold.inner(x, x).max().item() for M, x in zip(pm.P, pm.factorize(X))],
-                "curv_value": [abs(M.curvature) for M in pm.P],
-            }
-            ps_svm = mix_curv_svm(mix_component=sig, embed_data=embed_data)
-            y_pred = ps_svm.process_data()
-            accs["ps_svm"] = _score(None, y_test_np, ps_svm, y_pred_override=y_pred, torch=False)
+        ps_svm = ProductSpaceSVM(pm=pm, task=task, h_constraints=False, e_constraints=False)
+        ps_svm.fit(X_train, y_train)
+        accs["ps_svm"] = _score(X_test, y_test_np, ps_svm, torch=False)
 
     if "distance_dt" in models:
         raise NotImplementedError("Distance decision tree not implemented yet")

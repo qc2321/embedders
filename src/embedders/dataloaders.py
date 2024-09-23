@@ -4,6 +4,7 @@ import networkx as nx
 import pandas as pd
 import numpy as np
 import shlex
+from pathlib import Path
 from scipy.io import mmread
 
 
@@ -92,6 +93,29 @@ def load_polblogs(
         return torch.tensor(dists)
 
 
+def load_cora(
+    cora_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.edges",
+    cora_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.node_labels",
+    labels: bool = False,
+) -> TT["n_points", "n_points"]:
+    # Edges
+    G = nx.read_edgelist(cora_edges_path, delimiter=",", data=[("weight", int)], nodetype=int)
+
+    # Node labels
+    with open(cora_labels_path) as f:
+        for line in f:
+            node, label = line.strip().split(",")
+            G.nodes[int(node)]["label"] = int(label)
+
+    dists, idx = _top_cc_dists(G)
+
+    if labels:
+        labels = [G.nodes[i]["label"] for i in idx]
+        return torch.tensor(dists), labels
+    else:
+        return torch.tensor(dists)
+
+
 def load_blood_cells():
     raise NotImplementedError
 
@@ -123,6 +147,8 @@ def load(name: str, **kwargs) -> TT["n_points", "n_points"]:
         return load_power(**kwargs)
     elif name == "polblogs":
         return load_polblogs(**kwargs)
+    elif name == "cora":
+        return load_cora(**kwargs)
     elif name == "blood_cells":
         return load_blood_cells(**kwargs)
     elif name == "lymphoma_and_healthy_donors":

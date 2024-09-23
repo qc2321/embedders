@@ -3,6 +3,8 @@ import torch
 # from joblib import Parallel, delayed
 from sklearn.base import BaseEstimator, ClassifierMixin
 
+from tqdm.notebook import tqdm
+
 from .midpoint import midpoint
 from .manifolds import ProductManifold
 
@@ -105,13 +107,14 @@ def _get_info_gains(
 
     return ig
 
+
 def _get_info_gains_nobatch(
     angles: TT["batch n_dims"],
     labels: TT["batch n_classes"],
     criterion: Literal["gini", "mse"] = "gini",
     min_values_leaf: int = 1,
     eps: float = 1e-10,
-    batch_size = 256,
+    batch_size=256,
 ) -> TT["batch dims"]:
     """
     Given angles matrix and labels, return information gain for each possible split.
@@ -130,13 +133,16 @@ def _get_info_gains_nobatch(
         pos_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
         neg_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
 
+        my_tqdm = tqdm(total=angles.shape[0] * angles.shape[1], desc="Calculating information gains")
         for d in range(angles.shape[1]):
             for batch_start in range(0, angles.shape[0], batch_size):
                 batch_end = min(batch_start + batch_size, angles.shape[0])
                 i_batch = torch.arange(batch_start, batch_end, device=angles.device)
 
                 # Expanding angles for broadcasting over the batch
-                angles_d = angles[:, d].unsqueeze(0).expand(batch_end - batch_start, -1)  # [batch_size, angles.shape[0]]
+                angles_d = (
+                    angles[:, d].unsqueeze(0).expand(batch_end - batch_start, -1)
+                )  # [batch_size, angles.shape[0]]
                 angles_i_d = angles[i_batch, d].unsqueeze(1)  # [batch_size, 1]
 
                 mask = _angular_greater(angles_d, angles_i_d)  # [batch_size, angles.shape[0]]
@@ -149,6 +155,7 @@ def _get_info_gains_nobatch(
                 pos_labels[i_batch, d, :] = pos_labels_entry.sum(dim=0)
                 neg_labels[i_batch, d, :] = neg_labels_entry.sum(dim=0)
 
+                my_tqdm.update(batch_end - batch_start)
 
         # Total counts are sums of label counts
         n_pos = pos_labels.sum(dim=-1) + eps
@@ -202,7 +209,6 @@ def _get_info_gains_nobatch(
     return ig
 
 
-
 def _get_split(
     mask: TT["query_batch"],
     angles: TT["query_batch dims"],
@@ -248,7 +254,7 @@ def _get_split(
     # Split the comparisons and labels using advanced indexing
     angles_neg = angles[neg_indices]
     angles_pos = angles[pos_indices]
-    if len(comparisons) != 0: # Handle nonbatched case better
+    if len(comparisons) != 0:  # Handle nonbatched case better
         comparisons_neg = comparisons[neg_indices][:, :, neg_indices]
         comparisons_pos = comparisons[pos_indices][:, :, pos_indices]
     else:
@@ -280,7 +286,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         min_impurity_decrease=0.0,
         task: Literal["classification", "regression"] = "classification",
         use_special_dims=False,
-        batch_size=None
+        batch_size=None,
     ):
         # Store hyperparameters
         self.pm = pm
@@ -411,7 +417,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             angle_comparisons = comparisons[n, d]
         else:
             angle_comparisons = _angular_greater(angles[:, d], theta_pos).flatten()
-        if (angle_comparisons == 1.).all():
+        if (angle_comparisons == 1.0).all():
             theta_neg = theta_pos
             # TODO: replace this with something better, e.g. make "circular_greater" strict and make the pos_class the
             # smallest theta where this is 1.
@@ -603,7 +609,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
             self.batched = False
         else:
             self.batched = True
-        
+
         # Random forest hyperparameters
         self.n_estimators = n_estimators
         self.max_features = max_features

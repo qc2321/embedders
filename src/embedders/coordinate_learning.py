@@ -45,7 +45,7 @@ def train_coords(
     my_tqdm = tqdm(total=burn_in_iterations + training_iterations)
 
     # Outer training loop - mostly setting optimizer learning rates up here
-    pm.losses = []
+    losses = []
     for lr, n_iters in ((burn_in_learning_rate, burn_in_iterations), (learning_rate, training_iterations)):
         # Set the learning rate
         pm.opt.param_groups[0]["lr"] = lr
@@ -58,7 +58,7 @@ def train_coords(
             dist_est = pm.pdist(pm.x_embed)
             L = distortion_loss(dist_est, dists)
             L.backward()
-            pm.losses.append(L.item())
+            losses.append(L.item())
             pm.opt.step()
 
             # TQDM management
@@ -70,5 +70,7 @@ def train_coords(
                 d = {f"r{i}": f"{x._log_scale.item():.3f}" for i, x in enumerate(pm.manifold.manifolds)}
                 d_avg_this_iter = d_avg(dist_est, dists)
                 d["D_avg"] = f"{d_avg_this_iter:.4f}"
-                d["L_avg"] = f"{np.mean(pm.losses[-loss_window_size:]):.3e}"
+                d["L_avg"] = f"{np.mean(losses[-loss_window_size:]):.3e}"
                 my_tqdm.set_postfix(d)
+
+    return pm.x_embed, losses
