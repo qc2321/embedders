@@ -280,7 +280,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
     def __init__(
         self,
         pm,
-        max_depth=3,
+        max_depth=None,
         min_samples_leaf=1,
         min_samples_split=2,
         min_impurity_decrease=0.0,
@@ -290,7 +290,10 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
     ):
         # Store hyperparameters
         self.pm = pm
-        self.max_depth = max_depth
+        if max_depth is None:
+            self.max_depth = -1  # This runs forever since the loop checks depth == 0
+        else:
+            self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.min_samples_split = min_samples_split
         self.min_impurity_decrease = min_impurity_decrease
@@ -582,7 +585,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         pm,
         task: Literal["classification", "regression"] = "classification",
         use_special_dims=False,
-        max_depth=3,
+        max_depth=None,
         min_samples_leaf=1,
         min_samples_split=2,
         min_impurity_decrease=0.0,
@@ -597,7 +600,10 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         tree_kwargs = {}
         self.pm = tree_kwargs["pm"] = pm
         self.task = tree_kwargs["task"] = task
-        self.max_depth = tree_kwargs["max_depth"] = max_depth
+        if max_depth is None:
+            self.max_depth = tree_kwargs["max_depth"] = -1
+        else:
+            self.max_depth = tree_kwargs["max_depth"] = max_depth
         self.min_samples_leaf = tree_kwargs["min_samples_leaf"] = min_samples_leaf
         self.min_samples_split = tree_kwargs["min_samples_split"] = min_samples_split
         self.min_impurity_decrease = tree_kwargs["min_impurity_decrease"] = min_impurity_decrease
@@ -615,7 +621,6 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.max_features = max_features
         self.max_samples = max_samples
         self.random_state = random_state
-        self.max_depth = max_depth
         self.n_jobs = n_jobs
         self.trees = [ProductSpaceDT(**tree_kwargs) for _ in range(n_estimators)]
 
@@ -650,7 +655,6 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         # Can use any tree to preprocess X and y
         angles, labels, classes, comparisons = self.trees[0]._preprocess(X=X, y=y)
         self.classes_ = classes
-        # print(classes)
 
         # Use seed here
         if self.random_state is not None:

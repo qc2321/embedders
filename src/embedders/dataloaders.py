@@ -12,7 +12,7 @@ import gzip
 import pickle
 
 
-def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list):
+def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> Tuple[np.ndarray, list]:
     """Returns the distances between the top connected component of a graph"""
     if to_undirected:
         G = G.to_undirected()
@@ -23,7 +23,7 @@ def _top_cc_dists(G: nx.Graph, to_undirected: bool = True) -> (np.ndarray, list)
 
 def load_cities(
     cities_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cities" / "cities.txt",
-) -> TT["n_points", "n_points"], None, None:
+) -> Tuple[TT["n_points", "n_points"], None, None]:
     dists_flattened = []
     with open(cities_path) as f:
         for line in f:
@@ -65,7 +65,7 @@ def load_cs_phds(
 
     phd_dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(phd_dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G))
+    return torch.tensor(phd_dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
 def load_facebook():
@@ -94,10 +94,12 @@ def load_polblogs(
     # Filter to match G
     polblogs_labels = polblogs_labels[idx].tolist()
 
-    return torch.tensor(dists), torch.tensor(polblogs_labels), torch.tensor(nx.to_numpy_array(G))
+    return torch.tensor(dists), torch.tensor(polblogs_labels), torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
-def _load_network_repository(edges_path, labels_path) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
+def _load_network_repository(
+    edges_path, labels_path
+) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     # Edges
     G = nx.read_edgelist(edges_path, delimiter=",", data=[("weight", int)], nodetype=int)
 
@@ -110,7 +112,7 @@ def _load_network_repository(edges_path, labels_path) -> Tuple[TT["n_points", "n
     dists, idx = _top_cc_dists(G)
 
     labels = [G.nodes[i]["label"] for i in idx]
-    return torch.tensor(dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G))
+    return torch.tensor(dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
 def load_cora(
@@ -118,6 +120,7 @@ def load_cora(
     cora_labels_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cora" / "cora.node_labels",
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     return _load_network_repository(cora_edges_path, cora_labels_path)
+
 
 def load_citeseer(
     citeseer_edges_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "citeseer" / "citeseer.edges",
@@ -144,7 +147,7 @@ def load_karate_club(
 
     dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G))
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
 def load_lesmis(
@@ -154,7 +157,7 @@ def load_lesmis(
 
     dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G))
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
 def load_adjnoun(
@@ -164,11 +167,11 @@ def load_adjnoun(
 
     dists, idx = _top_cc_dists(G)
 
-    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G))
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
 def load_blood_cells(
-    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad"
+    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad",
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     with gzip.open(blood_cell_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
@@ -179,7 +182,7 @@ def load_blood_cells(
 
 
 def load_lymphoma(
-    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad"
+    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad",
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     """https://www.10xgenomics.com/resources/datasets/hodgkins-lymphoma-dissociated-tumor-targeted-immunology-panel-3-1-standard-4-0-0"""
     with gzip.open(lymphoma_anndata_path, "rb") as f:
@@ -257,6 +260,12 @@ def load(name: str, **kwargs) -> Tuple[TT["n_points", "n_points"], TT["n_points"
         return load_citeseer(**kwargs)
     elif name == "pubmed":
         return load_pubmed(**kwargs)
+    elif name == "karate_club":
+        return load_karate_club(**kwargs)
+    elif name == "lesmis":
+        return load_lesmis(**kwargs)
+    elif name == "adjnoun":
+        return load_adjnoun(**kwargs)
     elif name == "blood_cells":
         return load_blood_cells(**kwargs)
     elif name == "lymphoma":

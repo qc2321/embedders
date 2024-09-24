@@ -42,7 +42,7 @@ def train_coords(
     )
 
     # Init TQDM
-    my_tqdm = tqdm(total=burn_in_iterations + training_iterations)
+    my_tqdm = tqdm(total=burn_in_iterations + training_iterations, leave=False)
 
     # Outer training loop - mostly setting optimizer learning rates up here
     losses = []

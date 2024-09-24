@@ -74,6 +74,7 @@ def benchmark(
     min_samples_leaf: int = 1,
     task: Literal["classification", "regression"] = "classification",
     seed: Optional[int] = None,
+    use_special_dims: bool = False,
 ) -> Dict[str, float]:
     # Coerce to tensor as needed
     if not torch.is_tensor(X):
@@ -165,12 +166,12 @@ def benchmark(
         accs["sklearn_rf"] = _score(X_test_np, y_test_np, rf, torch=False)
 
     if "product_dt" in models:
-        psdt = ProductSpaceDT(pm=pm, task=task, use_special_dims=True, **tree_kwargs)
+        psdt = ProductSpaceDT(pm=pm, task=task, **tree_kwargs, use_special_dims=use_special_dims)
         psdt.fit(X_train, y_train)
         accs["product_dt"] = _score(X_test, y_test_np, psdt, torch=True)
 
     if "product_rf" in models:
-        psrf = ProductSpaceRF(pm=pm, task=task, use_special_dims=True, **tree_kwargs, **rf_kwargs)
+        psrf = ProductSpaceRF(pm=pm, task=task, **tree_kwargs, **rf_kwargs, use_special_dims=use_special_dims)
         psrf.fit(X_train, y_train)
         accs["product_rf"] = _score(X_test, y_test_np, psrf, torch=True)
 
