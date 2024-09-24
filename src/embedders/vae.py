@@ -76,5 +76,5 @@ class ProductSpaceVAE(torch.nn.Module):
         # kld = self.kl_divergence(z_means, sigmas)
         x_reconstructed, z_means, sigma_factorized = self(x)
         kld = self.kl_divergence(z_means, sigma_factorized)
-        ll = -self.reconstruction_loss(x_reconstructed, x).sum(dim=1)
+        ll = -self.reconstruction_loss(x_reconstructed.view(x.shape[0], -1), x.view(x.shape[0], -1)).sum(dim=1)
         return (ll - self.beta * kld).mean(), ll.mean(), kld.mean()

@@ -171,26 +171,28 @@ def load_adjnoun(
 
 
 def load_blood_cells(
-    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad",
+    blood_cell_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "blood_cell_scrna" / "adata.h5ad.gz",
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     with gzip.open(blood_cell_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
-    X = torch.tensor(adata.X.todense())
+    X = torch.tensor(adata.X.todense()).float()
     X = X / X.sum(dim=1, keepdim=True)
+    y = torch.tensor([int(x) for x in adata.obs["cell_type"].values])
 
-    return X, torch.tensor(adata.obs["cell_type"].values), None
+    return X, y, None
 
 
 def load_lymphoma(
-    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad",
+    lymphoma_anndata_path: str = Path(__file__).parent.parent.parent / "data" / "lymphoma" / "adata.h5ad.gz",
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], None]:
     """https://www.10xgenomics.com/resources/datasets/hodgkins-lymphoma-dissociated-tumor-targeted-immunology-panel-3-1-standard-4-0-0"""
     with gzip.open(lymphoma_anndata_path, "rb") as f:
         adata = anndata.read_h5ad(f)
-    X = torch.tensor(adata.X.todense())
+    X = torch.tensor(adata.X.todense()).float()
     X = X / X.sum(dim=1, keepdim=True)
+    y = torch.tensor([int(x) for x in adata.obs["cell_type"].values])
 
-    return X, torch.tensor(adata.obs["cell_type"].values), None
+    return X, y, None
 
 
 def load_cifar_100(
@@ -203,7 +205,7 @@ def load_cifar_100(
     with open(cifar_data_path / split, "rb") as f:
         data = pickle.load(f, encoding="bytes")
     X = torch.tensor(data[b"data"]).float()
-    X = X.reshape(-1, 3, 32, 32).permute(0, 2, 3, 1)
+    X = X.reshape(-1, 3, 32, 32)#.permute(0, 2, 3, 1)
     X = X / 255.0
 
     labels = data[b"coarse_labels"] if coarse else data[b"fine_labels"]

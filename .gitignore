@@ -7,3 +7,5 @@ data/cifar_100/cifar-100-python.tar.gz
 data/cifar_100/cifar-100-python/
 data/blood_cell_scrna/*
 data/lymphoma/*
+data/mnist/*-ubyte*
+notebooks/scratch*
