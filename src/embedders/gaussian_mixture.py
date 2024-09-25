@@ -76,7 +76,7 @@ def gaussian_mixture(
     assert samples.shape == (num_points, pm.ambient_dim)
 
     # Map clusters to classes
-    cluster_to_class = list(range(2))
+    cluster_to_class = list(range(num_classes))
     for i in range(num_clusters - num_classes):
         cluster_to_class.append(torch.randint(0, num_classes, (1,)).item())
     cluster_to_class = torch.tensor(cluster_to_class)

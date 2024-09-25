@@ -133,7 +133,7 @@ def _get_info_gains_nobatch(
         pos_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
         neg_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
 
-        my_tqdm = tqdm(total=angles.shape[0] * angles.shape[1], desc="Calculating information gains")
+        my_tqdm = tqdm(total=angles.shape[0] * angles.shape[1], desc="Calculating information gains", leave=False)
         for d in range(angles.shape[1]):
             for batch_start in range(0, angles.shape[0], batch_size):
                 batch_end = min(batch_start + batch_size, angles.shape[0])
@@ -287,6 +287,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         task: Literal["classification", "regression"] = "classification",
         use_special_dims=False,
         batch_size=None,
+        n_features: Literal["d", "d_choose_2"] = "d",
     ):
         # Store hyperparameters
         self.pm = pm
@@ -298,6 +299,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.min_samples_split = min_samples_split
         self.min_impurity_decrease = min_impurity_decrease
         self.use_special_dims = use_special_dims
+        self.n_features = n_features
 
         # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
         self.batch_size = batch_size
@@ -350,17 +352,41 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                 print("Warning: y contains non-integer values. Try regression instead.")
 
         # Process X-values into angles based on the signature
-        angles = torch.zeros((X.shape[0], self.pm.dim), device=X.device, dtype=X.dtype)
+        angles = []
+        angle2man = []
+        special_first = []
         for i, M in enumerate(self.pm.P):
-            target_idx = self.pm.man2intrinsic[i]
             dims = self.pm.man2dim[i]
+
+            # Non-Euclidean manifolds use angular projections
             if M.type in ["H", "S"]:
-                num = X[:, dims[0] : dims[0] + 1]
-                denom = X[:, dims[1:]]
+                if self.n_features == "d":
+                    dim = dims[0]
+                    num = X[:, dim : dim + 1]
+                    denom = X[:, dims[1:]]
+                    angles.append(torch.atan2(num, denom))
+                    special_first += [True] * (len(dims) - 1)
+                    angle2man += [i] * (len(dims) - 1)
+
+                elif self.n_features == "d_choose_2":
+                    for j, dim in enumerate(dims[:-1]):
+                        num = X[:, dim : dim + 1]
+                        denom = X[:, dims[j + 1 :]]
+                        angles.append(torch.atan2(num, denom))
+                        special_first += [j == 0] * (len(dims) - j - 1)
+                        angle2man += [i] * (len(dims) - j - 1)
+
+            # Euclidean manifolds use a dummy dimension to get an angle
             elif M.type == "E":
                 num = torch.ones(1, device=X.device, dtype=X.dtype)
                 denom = X[:, dims]
-            angles[:, target_idx] = torch.atan2(num, denom)
+                angles.append(torch.atan2(num, denom))
+                special_first += [True] * (len(dims) - 1)
+                angle2man += [i] * (len(dims) - 1)
+
+        angles = torch.cat(angles, dim=1)
+        self.angle2man = angle2man
+        self.special_first = special_first
 
         # Create a tensor of comparisons
         if self.batched:
@@ -433,10 +459,12 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
             active_dim = self.permutations[d].item()
         else:
             active_dim = d.item()
-        manifold = self.pm.P[self.pm.intrinsic2man[active_dim]]
+        # manifold = self.pm.P[self.pm.intrinsic2man[active_dim]]
+        manifold = self.pm.P[self.angle2man[active_dim]]
+        special_first_bool = self.special_first[active_dim]
 
         # Get midpoint
-        m = midpoint(theta_pos, theta_neg, manifold)
+        m = midpoint(theta_pos, theta_neg, manifold, special_first=special_first_bool)
 
         return n, d, m
 
@@ -585,6 +613,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         pm,
         task: Literal["classification", "regression"] = "classification",
         use_special_dims=False,
+        n_features: Literal["d", "d_choose_2"] = "d",
         max_depth=None,
         min_samples_leaf=1,
         min_samples_split=2,
@@ -608,6 +637,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.min_samples_split = tree_kwargs["min_samples_split"] = min_samples_split
         self.min_impurity_decrease = tree_kwargs["min_impurity_decrease"] = min_impurity_decrease
         self.use_special_dims = tree_kwargs["use_special_dims"] = use_special_dims
+        self.n_features = tree_kwargs["n_features"] = n_features
 
         # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
         self.batch_size = batch_size
@@ -655,6 +685,11 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         # Can use any tree to preprocess X and y
         angles, labels, classes, comparisons = self.trees[0]._preprocess(X=X, y=y)
         self.classes_ = classes
+
+        # Also update angle2man and special_first
+        for tree in self.trees:
+            tree.angle2man = self.trees[0].angle2man
+            tree.special_first = self.trees[0].special_first
 
         # Use seed here
         if self.random_state is not None:

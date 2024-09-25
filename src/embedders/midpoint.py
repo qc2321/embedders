@@ -25,11 +25,13 @@ def euclidean_midpoint(u, v):
     return torch.arctan2(torch.tensor(2.0), (1.0 / torch.tan(u) + 1.0 / torch.tan(v)))
 
 
-def midpoint(u, v, manifold):
+def midpoint(u, v, manifold, special_first=False):
     if torch.isclose(u, v):
         return u
-    elif manifold.type == "H":
+    elif manifold.type == "H" and special_first:
         return hyperbolic_midpoint(u, v)
+    elif manifold.type == "H":
+        return spherical_midpoint(u, v)  # Naive bisection
     elif manifold.type == "S":
         return spherical_midpoint(u, v)
     elif manifold.type == "E":
