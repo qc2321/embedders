@@ -263,9 +263,11 @@ def benchmark(
         accs["perceptron"] = _score(X_test_np, y_test_np, ptron, torch=False)
 
     if "ps_perceptron" in models:
-        psrf = ProductSpacePerceptron(pm=pm)
-        psrf.fit(X_train, y_train)
-        accs["ps_perceptron"] = _score(X_test, y_test_np, psrf, torch=True)
+        if task == "classification":
+            ps_per = ProductSpacePerceptron(pm=pm)
+            ps_per.fit(X_train, y_train)
+            accs["ps_perceptron"] = _score(X_test, y_test_np, ps_per, torch=True)
+        # TODO: regression
 
     if "svm" in models:
         # Get inner products for precomputed kernel matrix
