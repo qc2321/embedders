@@ -608,7 +608,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         if self.task == "classification":
             return self.classes_[self.predict_proba(X).argmax(dim=1)]
         else:
-            return self.predict_proba(X)  # Simplified version
+            return self.predict_proba(X).flatten()  # Simplified version
 
     def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""
@@ -738,7 +738,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         if self.task == "classification":
             return self.classes_[self.predict_proba(X).argmax(dim=1)]
         else:
-            return self.predict_proba(X)  # Simplified version
+            return self.predict_proba(X).flatten()  # Simplified version
 
     def score(self, X: TT["batch intrinsic_dim"], y: TT["batch"]) -> TT["batch"]:
         """Return the mean accuracy on the given test data and labels"""
