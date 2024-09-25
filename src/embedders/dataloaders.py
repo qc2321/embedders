@@ -245,6 +245,36 @@ def load_mnist(
 
     return X, torch.tensor(labels), None
 
+def _month_to_unit_circle_point(month: str) -> Tuple[float, float]:
+    """Convert month abbreviation to a point on the unit circle."""
+    month_to_index = {
+        'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+        'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+    }
+    
+    if month not in month_to_index:
+        raise ValueError(f"Invalid month: {month}")
+    
+    index = month_to_index[month]
+    angle = 2 * np.pi * index / 12
+    
+    # Return x and y coordinates on the unit circle
+    return np.cos(angle), np.sin(angle)
+
+
+def load_temperature(
+    temperature_path: str = Path(__file__).parent.parent / "data" / "temperature" / "temperature.csv",
+) -> Tuple[TT["n_points", "n_points", "n_points"], TT["n_points", "n_points"], TT["n_points"]]:
+    
+    temperature_dataset = pd.read_csv(temperature_path)    
+    temperature_dataset = temperature_dataset.drop(columns=['Latitude', 'Longitude', 'Country', 'City', 'Year'])
+    temperature_dataset = pd.melt(temperature_dataset, id_vars=['X', 'Y', 'Z'], var_name='Month', value_name='Temperature')
+    
+    # Apply month_to_unit_circle_point to the 'Month' column to get x and y for each month
+    temperature_dataset[['Month_X', 'Month_Y']] = temperature_dataset['Month'].apply(lambda month: pd.Series(_month_to_unit_circle_point(month)))
+
+    return torch.tensor(temperature_dataset[['X', 'Y', 'Z']]), torch.tensor(temperature_dataset[['Month_X', 'Month_Y']], torch.tensor(temperature_dataset[['Temperature']])
+
 
 def load(name: str, **kwargs) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     if name == "cities":
@@ -277,5 +307,7 @@ def load(name: str, **kwargs) -> Tuple[TT["n_points", "n_points"], TT["n_points"
         return load_cifar_100(**kwargs)
     elif name == "mnist":
         return load_mnist(**kwargs)
+    elif name == "temperature":
+        return load_temperature(**kwargs)
     else:
         raise ValueError(f"Unknown dataset: {name}")
