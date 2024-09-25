@@ -28,13 +28,14 @@ def euclidean_midpoint(u, v):
 def midpoint(u, v, manifold, special_first=False):
     if torch.isclose(u, v):
         return u
+
     elif manifold.type == "H" and special_first:
         return hyperbolic_midpoint(u, v)
-    elif manifold.type == "H":
-        return spherical_midpoint(u, v)  # Naive bisection
-    elif manifold.type == "S":
-        return spherical_midpoint(u, v)
-    elif manifold.type == "E":
+
+    elif manifold.type == "E" and special_first:
         return euclidean_midpoint(u, v)
+
+    # Spherical midpoint handles all spherical angles
+    # *AND* any angles that don't involve figuring out where you hit the manifold
     else:
-        raise ValueError(f"No midpoint formula for manifold type '{manifold.type}'")
+        return spherical_midpoint(u, v)

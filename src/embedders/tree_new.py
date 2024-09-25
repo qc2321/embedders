@@ -381,8 +381,19 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                 num = torch.ones(1, device=X.device, dtype=X.dtype)
                 denom = X[:, dims]
                 angles.append(torch.atan2(num, denom))
-                special_first += [True] * (len(dims) - 1)
-                angle2man += [i] * (len(dims) - 1)
+                special_first += [True] * len(dims)
+                angle2man += [i] * len(dims)
+
+                if self.n_features == "d_choose_2":
+                    # Note that we do the entire loop over dims here
+                    # This is because we faked a dimension at the start
+                    # That's also why we don't subtract 1 from len(dims)
+                    for j, dim in enumerate(dims[:-1]):
+                        num = X[:, dim : dim + 1]
+                        denom = X[:, dims[j + 1 :]]
+                        angles.append(torch.atan2(num, denom))
+                        special_first += [False] * (len(dims) - j)
+                        angle2man += [i] * (len(dims) - j)
 
         angles = torch.cat(angles, dim=1)
         self.angle2man = angle2man
