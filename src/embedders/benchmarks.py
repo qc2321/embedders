@@ -14,8 +14,8 @@ from sklearn.linear_model import SGDClassifier, SGDRegressor
 from sklearn.svm import SVC, SVR
 
 # Tabbaghi imports
-from hyperdt.product_space_svm import mix_curv_svm
-from hyperdt.product_space_perceptron import mix_curv_perceptron
+# from hyperdt.product_space_svm import mix_curv_svm
+# from hyperdt.product_space_perceptron import mix_curv_perceptron
 
 from .tree_new import ProductSpaceDT, ProductSpaceRF
 from .perceptron import ProductSpacePerceptron
