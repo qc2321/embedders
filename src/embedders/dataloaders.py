@@ -274,8 +274,8 @@ def _month_to_unit_circle_point(month: str) -> Tuple[float, float]:
 
 
 def load_temperature(
-    temperature_path: str = Path(__file__).parent.parent / "data" / "temperature" / "temperature.csv",
-) -> Tuple[TT["n_points", "n_points", "n_points"], TT["n_points", "n_points"], TT["n_points"]]:
+    temperature_path: str = Path(__file__).parent.parent.parent / "data" / "temperature" / "temperature.csv",
+) -> Tuple[TT["n_points", "n_dims"], TT["n_points"], None]:
     temperature_dataset = pd.read_csv(temperature_path)
     temperature_dataset = temperature_dataset.drop(columns=["Latitude", "Longitude", "Country", "City", "Year"])
     temperature_dataset = pd.melt(
@@ -288,9 +288,9 @@ def load_temperature(
     )
 
     return (
-        torch.tensor(temperature_dataset[["X", "Y", "Z"]]),
-        torch.tensor(temperature_dataset[["Month_X", "Month_Y"]]),
-        torch.tensor(temperature_dataset[["Temperature"]]),
+        torch.tensor(temperature_dataset[["X", "Y", "Z", "Month_X", "Month_Y"]].values),
+        torch.tensor(temperature_dataset[["Temperature"]].values.flatten()),
+        None,
     )
 
 
