@@ -37,7 +37,7 @@ def load_cities(
 
 
 def load_cs_phds(
-    cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds" / "cs_phds.txt",
+    cs_phds_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "cs_phds.txt",
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
     G = nx.Graph()
 
@@ -64,6 +64,7 @@ def load_cs_phds(
         G.nodes[i + 1]["year"] = year  # They're 1-indexed
 
     phd_dists, idx = _top_cc_dists(G)
+    labels = [G.nodes[i]["year"] for i in idx]
 
     return torch.tensor(phd_dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
