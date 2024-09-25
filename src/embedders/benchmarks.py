@@ -76,16 +76,12 @@ def benchmark(
     seed: Optional[int] = None,
     use_special_dims: bool = False,
     n_features: Literal["d", "d_choose_2"] = "d",
+    X_train=None,
+    X_test=None,
+    y_train=None,
+    y_test=None,
+    batch_size=None,
 ) -> Dict[str, float]:
-    # Coerce to tensor as needed
-    if not torch.is_tensor(X):
-        X = torch.tensor(X).to(device)
-    if not torch.is_tensor(y):
-        y = torch.tensor(y).to(device)
-
-    X = X.to(device)
-    y = y.to(device)
-
     # Input validation on (task, score) pairing
     if task == "classification":
         assert score in ["accuracy", "f1-micro"]
@@ -96,7 +92,36 @@ def benchmark(
     # X = torch.nan_to_num(X, nan=0, posinf=3e38, neginf=-3e38)
 
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+    if X_train is not None and X_test is not None and y_train is not None and y_test is not None:
+        # Coerce to tensor as needed
+        if not torch.is_tensor(X_train):
+            X_train = torch.tensor(X_train)
+        if not torch.is_tensor(X_test):
+            X_test = torch.tensor(X_test)
+        if not torch.is_tensor(y_train):
+            y_train = torch.tensor(y_train)
+        if not torch.is_tensor(y_test):
+            y_test = torch.tensor(y_test)
+
+        # Move to device
+        X_train = X_train.to(device)
+        X_test = X_test.to(device)
+        y_train = y_train.to(device)
+        y_test = y_test.to(device)
+
+    else:
+        # Coerce to tensor as needed
+        if not torch.is_tensor(X):
+            X = torch.tensor(X)
+        if not torch.is_tensor(y):
+            y = torch.tensor(y)
+
+        X = X.to(device)
+        y = y.to(device)
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+    # Get numpy versions
     X_train_np, X_test_np = X_train.detach().cpu().numpy(), X_test.detach().cpu().numpy()
     y_train_np, y_test_np = y_train.detach().cpu().numpy(), y_test.detach().cpu().numpy()
 
@@ -167,13 +192,26 @@ def benchmark(
         accs["sklearn_rf"] = _score(X_test_np, y_test_np, rf, torch=False)
 
     if "product_dt" in models:
-        psdt = ProductSpaceDT(pm=pm, task=task, **tree_kwargs, use_special_dims=use_special_dims, n_features=n_features)
+        psdt = ProductSpaceDT(
+            pm=pm,
+            task=task,
+            **tree_kwargs,
+            use_special_dims=use_special_dims,
+            n_features=n_features,
+            batch_size=batch_size,
+        )
         psdt.fit(X_train, y_train)
         accs["product_dt"] = _score(X_test, y_test_np, psdt, torch=True)
 
     if "product_rf" in models:
         psrf = ProductSpaceRF(
-            pm=pm, task=task, **tree_kwargs, **rf_kwargs, use_special_dims=use_special_dims, n_features=n_features
+            pm=pm,
+            task=task,
+            **tree_kwargs,
+            **rf_kwargs,
+            use_special_dims=use_special_dims,
+            n_features=n_features,
+            batch_size=batch_size,
         )
         psrf.fit(X_train, y_train)
         accs["product_rf"] = _score(X_test, y_test_np, psrf, torch=True)
