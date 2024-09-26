@@ -133,29 +133,30 @@ def _get_info_gains_nobatch(
         pos_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
         neg_labels = torch.zeros((angles.shape[0], angles.shape[1], labels.shape[1]), device=angles.device)
 
-        my_tqdm = tqdm(total=angles.shape[0] * angles.shape[1], desc="Calculating information gains", leave=False)
+        # my_tqdm = tqdm(total=angles.shape[0] * angles.shape[1], desc="Calculating information gains", leave=False)
         for d in range(angles.shape[1]):
-            for batch_start in range(0, angles.shape[0], batch_size):
-                batch_end = min(batch_start + batch_size, angles.shape[0])
-                i_batch = torch.arange(batch_start, batch_end, device=angles.device)
+            # mask_all = _angular_greater(angles[:, d], angles[:, d])
+            # pos_labels_d = mask_all.float().T @ labels  # Shape: [batch_size, num_labels]
+            # neg_labels_d = (~mask_all).float().T @ labels  # Shape: [batch_size, num_labels]
 
-                # Expanding angles for broadcasting over the batch
-                angles_d = (
-                    angles[:, d].unsqueeze(0).expand(batch_end - batch_start, -1)
-                )  # [batch_size, angles.shape[0]]
-                angles_i_d = angles[i_batch, d].unsqueeze(1)  # [batch_size, 1]
-
-                mask = _angular_greater(angles_d, angles_i_d)  # [batch_size, angles.shape[0]]
+            # pos_labels[:, d, :] = pos_labels_d
+            # neg_labels[:, d, :] = neg_labels_d
+            for j in range(0, angles.shape[0]):
+                mask = _angular_greater(angles[:, d], angles[j, d])
+                # mask = mask_all[:, j].unsqueeze(1)
 
                 # Expanding the labels to match the broadcasting needs of the mask
-                pos_labels_entry = torch.matmul(mask.float(), labels)  # [batch_size, labels.shape[1]]
-                neg_labels_entry = torch.matmul((~mask).float(), labels)  # [batch_size, labels.shape[1]]
+                pos_labels_entry = mask.float() * labels  # [batch_size, labels.shape[1]]
+                neg_labels_entry = ~mask * labels  # [batch_size, labels.shape[1]]
+                # pos_labels_entry = pos_labels_entry_all[j]
+                # neg_labels_entry = neg_labels_entry_all[j]
+                # print(pos_labels_entry.shape, pos_labels[j, d, :].shape)
 
                 # Assign the calculated values to the respective positions in the final tensors
-                pos_labels[i_batch, d, :] = pos_labels_entry.sum(dim=0)
-                neg_labels[i_batch, d, :] = neg_labels_entry.sum(dim=0)
+                pos_labels[j, d, :] = pos_labels_entry.sum(dim=0)
+                neg_labels[j, d, :] = neg_labels_entry.sum(dim=0)
 
-                my_tqdm.update(batch_end - batch_start)
+                # my_tqdm.update(1)
 
         # Total counts are sums of label counts
         n_pos = pos_labels.sum(dim=-1) + eps
@@ -649,6 +650,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.min_impurity_decrease = tree_kwargs["min_impurity_decrease"] = min_impurity_decrease
         self.use_special_dims = tree_kwargs["use_special_dims"] = use_special_dims
         self.n_features = tree_kwargs["n_features"] = n_features
+        self.batch_size = tree_kwargs["batch_size"] = batch_size
 
         # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
         self.batch_size = batch_size
