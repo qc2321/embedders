@@ -9,3 +9,4 @@ import embedders.signature_estimation
 import embedders.tree_new
 import embedders.vae
 import embedders.visualization
+import embedders.link_prediction

@@ -98,6 +98,18 @@ def load_polblogs(
     return torch.tensor(dists), torch.tensor(polblogs_labels), torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
 
 
+def load_polbooks(
+    polbooks_path: str = Path(__file__).parent.parent.parent / "data" / "graphs" / "polbooks" / "polbooks.gml",
+) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
+    G = nx.read_gml(polbooks_path, label="id")
+
+    dists, idx = _top_cc_dists(G)
+    labels_unique = ["c", "l", "n"]
+    labels = [labels_unique.index(G.nodes[i]["value"]) for i in idx]
+
+    return torch.tensor(dists), torch.tensor(labels), torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
+
+
 def _load_network_repository(
     edges_path, labels_path
 ) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
@@ -165,6 +177,25 @@ def load_adjnoun(
     adjnoun_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "adjnoun" / "adjnoun.gml",
 ) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
     G = nx.read_gml(adjnoun_path, label="id")
+
+    dists, idx = _top_cc_dists(G)
+
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
+
+
+def load_football(
+    football_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "football" / "football.mtx",
+) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
+    G = nx.from_scipy_sparse_array(mmread(football_path))
+    dists, idx = _top_cc_dists(G)
+
+    return torch.tensor(dists), None, torch.tensor(nx.to_numpy_array(G.subgraph(idx)))
+
+
+def load_dolphins(
+    dolphin_path=Path(__file__).parent.parent.parent / "data" / "graphs" / "dolphins" / "dolphins.gml",
+) -> Tuple[TT["n_points", "n_points"], None, TT["n_points", "n_points"]]:
+    G = nx.read_gml(dolphin_path, label="id")
 
     dists, idx = _top_cc_dists(G)
 
@@ -295,37 +326,28 @@ def load_temperature(
 
 
 def load(name: str, **kwargs) -> Tuple[TT["n_points", "n_points"], TT["n_points"], TT["n_points", "n_points"]]:
-    if name == "cities":
-        return load_cities(**kwargs)
-    elif name == "cs_phds":
-        return load_cs_phds(**kwargs)
-    elif name == "facebook":
-        return load_facebook(**kwargs)
-    elif name == "power":
-        return load_power(**kwargs)
-    elif name == "polblogs":
-        return load_polblogs(**kwargs)
-    elif name == "cora":
-        return load_cora(**kwargs)
-    elif name == "citeseer":
-        return load_citeseer(**kwargs)
-    elif name == "pubmed":
-        return load_pubmed(**kwargs)
-    elif name == "karate_club":
-        return load_karate_club(**kwargs)
-    elif name == "lesmis":
-        return load_lesmis(**kwargs)
-    elif name == "adjnoun":
-        return load_adjnoun(**kwargs)
-    elif name == "blood_cells":
-        return load_blood_cells(**kwargs)
-    elif name == "lymphoma":
-        return load_lymphoma(**kwargs)
-    elif name == "cifar_100":
-        return load_cifar_100(**kwargs)
-    elif name == "mnist":
-        return load_mnist(**kwargs)
-    elif name == "temperature":
-        return load_temperature(**kwargs)
+    loaders = {
+        "cities": load_cities,
+        "cs_phds": load_cs_phds,
+        "facebook": load_facebook,
+        "power": load_power,
+        "polblogs": load_polblogs,
+        "polbooks": load_polbooks,
+        "cora": load_cora,
+        "citeseer": load_citeseer,
+        "pubmed": load_pubmed,
+        "karate_club": load_karate_club,
+        "lesmis": load_lesmis,
+        "adjnoun": load_adjnoun,
+        "football": load_football,
+        "dolphins": load_dolphins,
+        "blood_cells": load_blood_cells,
+        "lymphoma": load_lymphoma,
+        "cifar_100": load_cifar_100,
+        "mnist": load_mnist,
+        "temperature": load_temperature,
+    }
+    if name in loaders:
+        return loaders[name](**kwargs)
     else:
         raise ValueError(f"Unknown dataset: {name}")
