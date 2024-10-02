@@ -289,6 +289,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         use_special_dims=False,
         batch_size=None,
         n_features: Literal["d", "d_choose_2"] = "d",
+        ablate_midpoints=False,
     ):
         # Store hyperparameters
         self.pm = pm
@@ -301,6 +302,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         self.min_impurity_decrease = min_impurity_decrease
         self.use_special_dims = use_special_dims
         self.n_features = n_features
+        self.ablate_midpoints = ablate_midpoints
 
         # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
         self.batch_size = batch_size
@@ -399,6 +401,10 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         angles = torch.cat(angles, dim=1)
         self.angle2man = angle2man
         self.special_first = special_first
+
+        # Ablate midpoints if necessary
+        if self.ablate_midpoints:
+            self.special_first = [False] * len(self.special_first)
 
         # Create a tensor of comparisons
         if self.batched:
@@ -630,6 +636,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         min_samples_leaf=1,
         min_samples_split=2,
         min_impurity_decrease=0.0,
+        ablate_midpoints=False,
         n_estimators=100,
         max_features="sqrt",
         max_samples=1.0,
@@ -651,6 +658,7 @@ class ProductSpaceRF(BaseEstimator, ClassifierMixin):
         self.use_special_dims = tree_kwargs["use_special_dims"] = use_special_dims
         self.n_features = tree_kwargs["n_features"] = n_features
         self.batch_size = tree_kwargs["batch_size"] = batch_size
+        self.ablate_midpoints = tree_kwargs["ablate_midpoints"] = ablate_midpoints
 
         # I use "batched" to mean "all at once" and "batch_size" to mean "in chunks"
         self.batch_size = batch_size
