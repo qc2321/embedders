@@ -140,12 +140,17 @@ def benchmark(
     # TODO: Implement other splits
     # TODO: Implement other scoring metrics
     def _score(_X, _y, model, y_pred_override=None, torch=False):
+        # Override y_pred
         if y_pred_override is not None:
             y_pred = y_pred_override
         else:
             y_pred = model.predict(_X)
+        
+        # Convert to numpy
         if torch:
             y_pred = y_pred.detach().cpu().numpy()
+        
+        # Score handling
         if score == "accuracy":
             return accuracy_score(_y, y_pred)
         elif score == "f1-micro":

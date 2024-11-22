@@ -201,7 +201,7 @@ class Manifold:
         """Exponential map of tangent vector u at base point"""
         if base is None:
             base = self.mu0
-        return self.expmap(x=base, u=u)
+        return self.manifold.expmap(x=base, u=u)
 
 
 class ProductManifold(Manifold):
@@ -249,7 +249,6 @@ class ProductManifold(Manifold):
             ambient_dims = self.man2dim[i]
             for j, k in zip(intrinsic_dims, ambient_dims[-len(intrinsic_dims) :]):
                 self.projection_matrix[j, k] = 1.0
-        
 
     def params(self):
         return [x._log_scale for x in self.manifold.manifolds]

@@ -358,6 +358,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
         angles = []
         angle2man = []
         special_first = []
+        angle_dims = []
         for i, M in enumerate(self.pm.P):
             dims = self.pm.man2dim[i]
 
@@ -370,6 +371,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                     angles.append(torch.atan2(num, denom))
                     special_first += [True] * (len(dims) - 1)
                     angle2man += [i] * (len(dims) - 1)
+                    angle_dims += [(dim, dim2) for dim2 in dims[1:]]
 
                 elif self.n_features == "d_choose_2":
                     for j, dim in enumerate(dims[:-1]):
@@ -378,6 +380,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                         angles.append(torch.atan2(num, denom))
                         special_first += [j == 0] * (len(dims) - j - 1)
                         angle2man += [i] * (len(dims) - j - 1)
+                        angle_dims += [(dim, dim2) for dim2 in dims[j + 1 :]]
 
             # Euclidean manifolds use a dummy dimension to get an angle
             elif M.type == "E":
@@ -386,6 +389,7 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                 angles.append(torch.atan2(num, denom))
                 special_first += [True] * len(dims)
                 angle2man += [i] * len(dims)
+                angle_dims += [(None, dim) for dim in dims]
 
                 if self.n_features == "d_choose_2":
                     # Note that we do the entire loop over dims here
@@ -397,10 +401,12 @@ class ProductSpaceDT(BaseEstimator, ClassifierMixin):
                         angles.append(torch.atan2(num, denom))
                         special_first += [False] * (len(dims) - j)
                         angle2man += [i] * (len(dims) - j)
+                        angle_dims += [(dim, dim2) for dim2 in dims[j + 1 :]]
 
         angles = torch.cat(angles, dim=1)
         self.angle2man = angle2man
         self.special_first = special_first
+        self.angle_dims = angle_dims
 
         # Ablate midpoints if necessary
         if self.ablate_midpoints:
