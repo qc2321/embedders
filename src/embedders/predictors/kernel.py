@@ -2,7 +2,7 @@ import torch
 
 from torchtyping import TensorType as TT
 
-from .manifolds import Manifold, ProductManifold
+from ..manifolds import Manifold, ProductManifold
 
 from typing import Optional, Tuple
 

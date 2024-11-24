@@ -6,7 +6,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from tqdm.notebook import tqdm
 
 from .midpoint import midpoint
-from .manifolds import ProductManifold
+from ..manifolds import ProductManifold
 
 # Typing stuff
 from torchtyping import TensorType as TT

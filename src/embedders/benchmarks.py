@@ -17,10 +17,15 @@ from sklearn.svm import SVC, SVR
 # from hyperdt.product_space_svm import mix_curv_svm
 # from hyperdt.product_space_perceptron import mix_curv_perceptron
 
-from .tree_new import ProductSpaceDT, ProductSpaceRF
-from .perceptron import ProductSpacePerceptron
-from .svm import ProductSpaceSVM
+import time
+
 from .manifolds import ProductManifold
+
+from .predictors.tree_new import ProductSpaceDT, ProductSpaceRF
+from .predictors.perceptron import ProductSpacePerceptron
+from .predictors.svm import ProductSpaceSVM
+from .predictors.mlp import MLP
+from .predictors.gnn import GNN
 
 
 def _fix_X(X, signature):
@@ -55,7 +60,8 @@ def benchmark(
     pm: ProductManifold,
     split: Literal["train_test", "cross_val"] = "train_test",
     device: Literal["cpu", "cuda", "mps"] = "cpu",
-    score: Literal["accuracy", "f1-micro", "mse", "percent_rmse"] = "f1-micro",
+    # score: Literal["accuracy", "f1-micro", "mse", "percent_rmse"] = "f1-micro",
+    score: List[Literal["accuracy", "f1-micro", "mse", "percent_rmse"]] = ["accuracy", "f1-micro"],
     models: List[str] = [
         "sklearn_dt",
         "sklearn_rf",
@@ -67,6 +73,10 @@ def benchmark(
         "ps_perceptron",
         # "ps_svm"
         # "svm",
+        "tangent_mlp",
+        "ambient_mlp",
+        "tangent_gnn",
+        "ambient_gnn",
     ],
     max_depth: int = 3,
     n_estimators: int = 12,
@@ -84,9 +94,11 @@ def benchmark(
 ) -> Dict[str, float]:
     # Input validation on (task, score) pairing
     if task == "classification":
-        assert score in ["accuracy", "f1-micro"]
+        # assert score in ["accuracy", "f1-micro"]
+        assert all(s in ["accuracy", "f1-micro", "time"] for s in score)
     elif task == "regression":
-        assert score in ["mse", "rmse", "percent_rmse"]
+        # assert score in ["mse", "rmse", "percent_rmse"]
+        assert all(s in ["mse", "rmse", "percent_rmse", "time"] for s in score)
 
     # # Fix nan and inf values
     # X = torch.nan_to_num(X, nan=0, posinf=3e38, neginf=-3e38)
@@ -119,19 +131,16 @@ def benchmark(
         X = X.to(device)
         y = y.to(device)
 
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+        X_train, X_test, y_train, y_test, train_idx, test_idx = train_test_split(X, y, np.arange(len(X)), test_size=0.2)
 
     # Get numpy versions
     X_train_np, X_test_np = X_train.detach().cpu().numpy(), X_test.detach().cpu().numpy()
     y_train_np, y_test_np = y_train.detach().cpu().numpy(), y_test.detach().cpu().numpy()
 
     # Tangents
-    X_train_tangent = pm.manifold.logmap(pm.mu0, X_train)
-    X_test_tangent = pm.manifold.logmap(pm.mu0, X_test)
-    X_train_tangent_np, X_test_tangent_np = (
-        X_train_tangent.detach().cpu().numpy(),
-        X_test_tangent.detach().cpu().numpy(),
-    )
+    X_train_tangent = pm.manifold.logmap(pm.mu0, X_train).detach()
+    X_test_tangent = pm.manifold.logmap(pm.mu0, X_test).detach()
+    X_train_tangent_np, X_test_tangent_np = X_train_tangent.cpu().numpy(), X_test_tangent.cpu().numpy()
 
     # Restricted X:
     X_train_restricted = _restrict_X(X_train_np, pm.signature)
@@ -145,25 +154,27 @@ def benchmark(
             y_pred = y_pred_override
         else:
             y_pred = model.predict(_X)
-        
+
         # Convert to numpy
         if torch:
             y_pred = y_pred.detach().cpu().numpy()
-        
+
         # Score handling
-        if score == "accuracy":
-            return accuracy_score(_y, y_pred)
-        elif score == "f1-micro":
-            return f1_score(_y, y_pred, average="micro")
-        elif score == "mse":
-            # return ((y_pred - _y) ** 2).mean()
-            return mean_squared_error(_y, y_pred)
-        elif score == "rmse":
-            return root_mean_squared_error(_y, y_pred)
-        elif score == "percent_rmse":
-            return (root_mean_squared_error(_y, y_pred, multioutput="raw_values") / np.abs(_y)).mean()
-        else:
-            raise ValueError(f"Unknown score: {score}")
+        out = {}
+        for s in score:
+            if s == "accuracy":
+                out[s] = accuracy_score(_y, y_pred)
+            elif s == "f1-micro":
+                out[s] = f1_score(_y, y_pred, average="micro")
+            elif s == "mse":
+                out[s] = mean_squared_error(_y, y_pred)
+            elif s == "rmse":
+                out[s] = root_mean_squared_error(_y, y_pred)
+            elif s == "percent_rmse":
+                out[s] = (root_mean_squared_error(_y, y_pred, multioutput="raw_values") / np.abs(_y)).mean()
+            else:
+                raise ValueError(f"Unknown score: {s}")
+        return out
 
     # Aggregate arguments
     tree_kwargs = {"max_depth": max_depth, "min_samples_leaf": min_samples_leaf, "min_samples_split": min_samples_split}
@@ -188,13 +199,19 @@ def benchmark(
     accs = {}
     if "sklearn_dt" in models:
         dt = dt_class(**tree_kwargs)
+        t1 = time.time()
         dt.fit(X_train_np, y_train_np)
+        t2 = time.time()
         accs["sklearn_dt"] = _score(X_test_np, y_test_np, dt, torch=False)
+        accs["sklearn_dt"]["time"] = t2 - t1
 
     if "sklearn_rf" in models:
         rf = rf_class(**tree_kwargs, **rf_kwargs)
+        t1 = time.time()
         rf.fit(X_train_np, y_train_np)
+        t2 = time.time()
         accs["sklearn_rf"] = _score(X_test_np, y_test_np, rf, torch=False)
+        accs["sklearn_rf"]["time"] = t2 - t1
 
     if "product_dt" in models:
         psdt = ProductSpaceDT(
@@ -205,8 +222,11 @@ def benchmark(
             n_features=n_features,
             batch_size=batch_size,
         )
+        t1 = time.time()
         psdt.fit(X_train, y_train)
+        t2 = time.time()
         accs["product_dt"] = _score(X_test, y_test_np, psdt, torch=True)
+        accs["product_dt"]["time"] = t2 - t1
 
     if "product_rf" in models:
         psrf = ProductSpaceRF(
@@ -218,31 +238,47 @@ def benchmark(
             n_features=n_features,
             batch_size=batch_size,
         )
+        t1 = time.time()
         psrf.fit(X_train, y_train)
+        t2 = time.time()
         accs["product_rf"] = _score(X_test, y_test_np, psrf, torch=True)
+        accs["product_rf"]["time"] = t2 - t1
 
     if "tangent_dt" in models:
         tdt = dt_class(**tree_kwargs)
+        t1 = time.time()
         tdt.fit(X_train_tangent_np, y_train_np)
+        t2 = time.time()
         accs["tangent_dt"] = _score(X_test_tangent_np, y_test_np, tdt, torch=False)
+        accs["tangent_dt"]["time"] = t2 - t1
 
     if "tangent_rf" in models:
         trf = rf_class(**tree_kwargs, **rf_kwargs)
+        t1 = time.time()
         trf.fit(X_train_tangent_np, y_train_np)
+        t2 = time.time()
         accs["tangent_rf"] = _score(X_test_tangent_np, y_test_np, trf, torch=False)
+        accs["tangent_rf"]["time"] = t2 - t1
 
     if "restricted_dt" in models:
         dt = dt_class(**tree_kwargs)
+        t1 = time.time()
         dt.fit(X_train_restricted, y_train_np)
+        t2 = time.time()
         accs["restricted_dt"] = _score(X_test_restricted, y_test_np, dt, torch=False)
+        accs["restricted_dt"]["time"] = t2 - t1
 
     if "restricted_rf" in models:
         rf = rf_class(**tree_kwargs, **rf_kwargs)
+        t1 = time.time()
         rf.fit(X_train_restricted, y_train_np)
+        t2 = time.time()
         accs["restricted_rf"] = _score(X_test_restricted, y_test_np, rf, torch=False)
+        accs["restricted_rf"]["time"] = t2 - t1
 
     if "knn" in models:
         # Get dists - max imputation is a workaround for some nan values we occasionally get
+        t1 = time.time()
         train_dists = pm.pdist(X_train)
         train_dists = torch.nan_to_num(train_dists, nan=train_dists[~train_dists.isnan()].max().item())
         train_test_dists = pm.dist(X_test, X_train)
@@ -256,26 +292,36 @@ def benchmark(
 
         # Train classifier on distances
         knn = knn_class(metric="precomputed")
+        t2 = time.time()
         knn.fit(train_dists, y_train_np)
+        t3 = time.time()
         accs["knn"] = _score(train_test_dists, y_test_np, knn, torch=False)
+        accs["knn"]["time"] = t3 - t1
 
     if "perceptron" in models:
         loss = "perceptron" if task == "classification" else "squared_error"
         ptron = perceptron_class(
             loss=loss, learning_rate="constant", fit_intercept=False, eta0=1.0, max_iter=10_000
         )  # fit_intercept must be false for ambient coordinates
+        t1 = time.time()
         ptron.fit(X_train_np, y_train_np)
+        t2 = time.time()
         accs["perceptron"] = _score(X_test_np, y_test_np, ptron, torch=False)
+        accs["perceptron"]["time"] = t2 - t1
 
     if "ps_perceptron" in models:
         if task == "classification":
             ps_per = ProductSpacePerceptron(pm=pm)
+            t1 = time.time()
             ps_per.fit(X_train, y_train)
+            t2 = time.time()
             accs["ps_perceptron"] = _score(X_test, y_test_np, ps_per, torch=True)
+            accs["ps_perceptron"]["time"] = t2 - t1
         # TODO: regression
 
     if "svm" in models:
         # Get inner products for precomputed kernel matrix
+        t1 = time.time()
         train_ips = pm.manifold.component_inner(X_train[:, None], X_train[None, :]).sum(dim=-1)
         train_test_ips = pm.manifold.component_inner(X_test[:, None], X_train[None, :]).sum(dim=-1)
 
@@ -286,18 +332,66 @@ def benchmark(
         # Train SVM on precomputed inner products
         svm = svm_class(kernel="precomputed", max_iter=10_000)
         # Need max_iter because it can hang. It can be large, since this doesn't happen often.
+        t2 = time.time()
         svm.fit(train_ips, y_train_np)
+        t3 = time.time()
         accs["svm"] = _score(train_test_ips, y_test_np, svm, torch=False)
+        accs["svm"]["time"] = t3 - t1
 
     if "ps_svm" in models:
         ps_svm = ProductSpaceSVM(pm=pm, task=task, h_constraints=False, e_constraints=False)
+        t1 = time.time()
         ps_svm.fit(X_train, y_train)
+        t2 = time.time()
         accs["ps_svm"] = _score(X_test, y_test_np, ps_svm, torch=False)
+        accs["ps_svm"]["time"] = t2 - t1
 
     if "distance_dt" in models:
         raise NotImplementedError("Distance decision tree not implemented yet")
 
     if "distance_rf" in models:
         raise NotImplementedError("Distance random forest not implemented yet")
+
+    if "tangent_mlp" in models:
+        out_dim = 1 if task == "regression" else len(np.unique(y_train_np))
+        tangent_mlp = MLP(pm=pm, tangent=True, task=task, input_dim=X_train.shape[1], output_dim=out_dim)
+        tangent_mlp.to(device)
+        t1 = time.time()
+        tangent_mlp.fit(X_train_tangent, y_train)
+        t2 = time.time()
+        accs["tangent_mlp"] = _score(X_test_tangent, y_test_np, tangent_mlp)
+        accs["tangent_mlp"]["time"] = t2 - t1
+
+    if "ambient_mlp" in models:
+        out_dim = 1 if task == "regression" else len(np.unique(y_train_np))
+        ambient_mlp = MLP(pm=pm, tangent=False, task=task, input_dim=X_train.shape[1], output_dim=out_dim)
+        ambient_mlp.to(device)
+        t1 = time.time()
+        ambient_mlp.fit(X_train, y_train)
+        t2 = time.time()
+        accs["ambient_mlp"] = _score(X_test, y_test_np, ambient_mlp)
+        accs["ambient_mlp"]["time"] = t2 - t1
+
+    if "tangent_gnn" in models:
+        out_dim = 1 if task == "regression" else len(np.unique(y_train_np))
+        tangent_gnn = GNN(pm=pm, input_dim=X_train.shape[1], output_dim=out_dim, task=task, tangent=True)
+        tangent_gnn.to(device)
+        t1 = time.time()
+        tangent_gnn.fit(X, y, train_idx=train_idx)
+        y_pred = tangent_gnn.predict(X, test_idx=test_idx)
+        t2 = time.time()
+        accs["tangent_gnn"] = _score(X_test, y_test, tangent_gnn, y_pred_override=y_pred)
+        accs["tangent_gnn"]["time"] = t2 - t1
+
+    if "ambient_gnn" in models:
+        out_dim = 1 if task == "regression" else len(np.unique(y_train_np))
+        ambient_gnn = GNN(pm=pm, input_dim=X_train.shape[1], output_dim=out_dim, task=task, tangent=False)
+        ambient_gnn.to(device)
+        t1 = time.time()
+        ambient_gnn.fit(X, y, train_idx=train_idx)
+        y_pred = tangent_gnn.predict(X, test_idx=test_idx)
+        t2 = time.time()
+        accs["ambient_gnn"] = _score(X_test, y_test, ambient_gnn, y_pred_override=y_pred)
+        accs["ambient_gnn"]["time"] = t2 - t1
 
     return accs
