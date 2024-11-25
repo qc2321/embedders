@@ -22,8 +22,8 @@ def get_dense_edges(dist_matrix, node_indices):
 
     # Create dense edges (all-to-all connections)
     n = len(node_indices)
-    rows = torch.arange(n).repeat_interleave(n)
-    cols = torch.arange(n).repeat(n)
+    rows = torch.arange(n, device=dist_matrix.device).repeat_interleave(n)
+    cols = torch.arange(n, device=dist_matrix.device).repeat(n)
     edge_index = torch.stack([rows, cols])
 
     # Get corresponding distances as edge weights
@@ -37,8 +37,31 @@ def get_dense_edges(dist_matrix, node_indices):
 
     return edge_index, edge_weights
 
+def get_nonzero(adj_matrix, node_indices):
+    # Get submatrix of distances
+    sub_adj = adj_matrix[node_indices][:, node_indices]
 
-class GNN(MLP):
+    # Create edges based on threshold
+    edges = sub_adj.nonzero().t()
+
+    # Get weights
+    edge_weights = sub_adj[sub_adj.nonzero(as_tuple=True)]
+
+    return edges, edge_weights
+
+def get_all(adj_matrix, node_indices):
+    n = len(node_indices)
+    rows = torch.arange(n, device=adj_matrix.device).repeat_interleave(n)
+    cols = torch.arange(n, device=adj_matrix.device).repeat(n)
+    edge_index = torch.stack([rows, cols])
+
+    # Get corresponding distances as edge weights
+    edge_weights = adj_matrix[node_indices][:, node_indices].flatten()
+
+    return edge_index, edge_weights
+
+
+class GNN(nn.Module):
     def __init__(
         self,
         pm,
@@ -50,7 +73,7 @@ class GNN(MLP):
         activation=nn.ReLU,
         edge_func=get_dense_edges,
     ):
-        super().__init__(pm=pm)
+        super().__init__()
         self.pm = pm
         self.task = task
         self.tangent = tangent
@@ -84,24 +107,22 @@ class GNN(MLP):
                 x = layer(x)
         return x
 
-    def fit(self, X, y, train_idx, epochs=1_000, lr=0.01):
-        # Get dists and such
-        dist_matrix = self.pm.pdist(X).detach()
-        if self.tangent:
-            X = self.pm.logmap(X).detach()
-
+    def fit(self, X, y, adj, train_idx, epochs=200, lr=1e-2):
         # Get edges for training set
-        train_edges, train_weights = self.edge_func(dist_matrix, train_idx)
+        train_edges, train_weights = self.edge_func(adj, train_idx)
         X_train = X[train_idx]
         y_train = y[train_idx]
 
         # This part is the same as MLP.fit()
-        opt = torch.optim.Adam(self.parameters(), lr=1e-3)
+        opt = torch.optim.Adam(self.parameters(), lr=lr)
         if self.task == "classification":
             loss_fn = nn.CrossEntropyLoss()
             y_train = y_train.long()
-        else:
+        elif self.task == "regression":
             loss_fn = nn.MSELoss()
+            y_train = y_train.float()
+        elif self.task == "link_prediction":
+            loss_fn = nn.BCEWithLogitsLoss()
             y_train = y_train.float()
 
         self.train()
@@ -112,12 +133,52 @@ class GNN(MLP):
             loss.backward()
             opt.step()
 
-    def predict(self, X, test_idx):
+    def predict(self, X, adj, test_idx):
         """Make predictions."""
         # Get edges for test set
         self.eval()
-        dist_matrix = self.pm.pdist(X).detach()
-        test_edges, test_weights = self.edge_func(dist_matrix, test_idx)
+        # dist_matrix = self.pm.pdist(X).detach()
+        test_edges, test_weights = self.edge_func(adj, test_idx)
         X_test = X[test_idx]
         y_pred = self(X_test, test_edges, test_weights)
         return y_pred.argmax(1).detach()
+
+class LinkPredictionGNN(GNN):
+    def forward(self, x, edge_index, edge_weight=None, ):
+        # Get node embeddings
+        x = super().forward(x, edge_index, edge_weight)
+        
+        # Compute edge scores
+        row, col = edge_index
+        scores = (x[row] * x[col]).sum(dim=1)
+        # return torch.sigmoid(scores)
+        return scores
+
+    def fit(self, X, dists, adj, train_idx, epochs=200, lr=1e-2, print_interval=None):
+        opt = torch.optim.Adam(self.parameters(), lr=lr)
+
+        train_edges, _ = self.edge_func(dists, train_idx)
+
+        # Convert adj to float
+        adj = adj.float().clip(0, 1) # some graphs have 2 edges
+
+        # Weights
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=1-adj.mean())
+
+        self.train()
+        for i in range(epochs):
+            opt.zero_grad()
+            pred = self(X, edge_index=train_edges)
+            labels = adj[train_idx][:, train_idx].flatten()
+            loss = loss_fn(pred, labels)
+            loss.backward()
+            opt.step()
+
+            if print_interval is not None and i % print_interval == 0:
+                print(f"Loss: {loss.item()}")
+
+    def predict(self, X, dists, test_idx):
+        self.eval()
+        # test_edges, _ = self.edge_func(dists, test_idx)
+        test_edges, _ = self.edge_func(dists, test_idx)
+        return self(X, edge_index=test_edges, ).detach()
