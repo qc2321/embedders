@@ -87,13 +87,13 @@ def gaussian_mixture(
     if task == "classification":
         labels = cluster_to_class[cluster_assignments]
     elif task == "regression":
-        slopes = (0.5 - torch.randn(num_clusters, pm.dim)) * 2
-        intercepts = (0.5 - torch.randn(num_clusters)) * 20
+        slopes = (0.5 - torch.randn(num_clusters, pm.dim, device=pm.device)) * 2
+        intercepts = (0.5 - torch.randn(num_clusters, device=pm.device)) * 20
         labels = torch.einsum("ij,ij->i", slopes[cluster_assignments], tangent_vals) + intercepts[cluster_assignments]
 
         # Noise component
         N = torch.distributions.Normal(0, regression_noise_std)
-        v = N.sample((num_points,))
+        v = N.sample((num_points,)).to(pm.device)
         labels += v
 
         # Normalize regression labels to range [0, 1] so that RMSE can be more easily interpreted

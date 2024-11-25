@@ -36,7 +36,7 @@ class MLP(nn.Module):
             x = layer(x)
         return x
 
-    def fit(self, X, y, epochs=1_000, lr=0.01):
+    def fit(self, X, y, epochs=200, lr=1e-2):
         """Train the model."""
         opt = torch.optim.Adam(self.parameters(), lr=lr)
         if self.task == "classification":
